@@ -461,18 +461,21 @@ func TestCreatePushSubscriptionRequiresEndpoint(t *testing.T) {
 
 func TestHealthAndMetricsEndpoints(t *testing.T) {
 	ts, _ := newTestServer(t, "")
-	resp, err := http.Get(ts.URL + "/healthz")
-	if err != nil {
-		t.Fatalf("healthz: %v", err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("healthz status = %d", resp.StatusCode)
+	// /health is what the deployment control plane probes for every service.
+	for _, path := range []string{"/health", "/healthz", "/readyz"} {
+		resp, err := http.Get(ts.URL + path)
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s = %d, want 200", path, resp.StatusCode)
+		}
 	}
 
 	githubDelivery(t, ts, "push", "metrics-1", `{"repository":{"full_name":"kaulie/m"}}`)
 
-	resp, err = http.Get(ts.URL + "/metrics")
+	resp, err := http.Get(ts.URL + "/metrics")
 	if err != nil {
 		t.Fatalf("metrics: %v", err)
 	}

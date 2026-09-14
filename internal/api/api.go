@@ -107,7 +107,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/deliveries", s.authAdmin(s.handleListDeliveries))
 	mux.HandleFunc("POST /v1/deliveries/requeue", s.authAdmin(s.handleRequeueDeliveries))
 
-	// Operational.
+	// Operational. /health is the path the deployment control plane probes for
+	// every service; /healthz is kept as the conventional Kubernetes alias.
+	mux.HandleFunc("GET /health", s.handleHealthz)
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /readyz", s.handleReadyz)
 	mux.HandleFunc("GET /metrics", s.handleMetrics)
@@ -126,10 +128,14 @@ func (s *Server) logRequests(next http.Handler) http.Handler {
 			map[string]string{"method": r.Method, "status": statusClass(rec.status)}, 1)
 		// Ingest routes have their own audit trail (see ingressLog); a second
 		// generic line would just double the volume.
-		if r.URL.Path != "/healthz" && r.URL.Path != "/metrics" && !isIngressPath(r.URL.Path) {
-			s.log.Info("http request",
-				"method", r.Method, "path", r.URL.Path,
-				"status", rec.status, "duration_ms", time.Since(start).Milliseconds())
+		switch r.URL.Path {
+		case "/health", "/healthz", "/readyz", "/metrics":
+		default:
+			if !isIngressPath(r.URL.Path) {
+				s.log.Info("http request",
+					"method", r.Method, "path", r.URL.Path,
+					"status", rec.status, "duration_ms", time.Since(start).Milliseconds())
+			}
 		}
 	})
 }

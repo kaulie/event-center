@@ -44,13 +44,14 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SSH=(ssh -o BatchMode=yes -o ConnectTimeout=15 "$EC_HOST")
 SCP=(scp -q -o BatchMode=yes)
 
-echo "==> building linux/amd64 binary"
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
-  -ldflags "-s -w -X main.version=$(git -C "$ROOT" describe --tags --always --dirty 2>/dev/null || echo dev)" \
-  -o /tmp/eventd.new "$ROOT/cmd/eventd"
+echo "==> packaging via build.sh (linux/amd64)"
+VERSION="$(git -C "$ROOT" describe --tags --always --dirty 2>/dev/null || echo dev)"
+( cd "$ROOT" && EC_BUILD_LINUX=1 APP_VERSION="$VERSION" ./build.sh >/dev/null )
+ARTIFACT="$ROOT/outputs/bin/eventd-linux-amd64"
+[ -f "$ARTIFACT" ] || { echo "build.sh did not produce $ARTIFACT" >&2; exit 1; }
 
 echo "==> uploading to $EC_HOST"
-"${SCP[@]}" /tmp/eventd.new "$EC_HOST:/tmp/eventd.new"
+"${SCP[@]}" "$ARTIFACT" "$EC_HOST:/tmp/eventd.new"
 "${SCP[@]}" "$ROOT/deploy/cloud-server/$EC_UNIT" "$EC_HOST:/tmp/$EC_UNIT"
 "${SCP[@]}" "$ROOT/deploy/cloud-server/logrotate-event-center" "$EC_HOST:/tmp/logrotate-event-center"
 
