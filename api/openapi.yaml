@@ -1,0 +1,526 @@
+openapi: 3.0.3
+info:
+  title: event-center
+  description: |
+    统一事件中心：外部事件源注入 → 持久化 → pub/sub 分发（push webhook + cursor pull）。
+
+    鉴权：管理接口用 `Authorization: Bearer <admin token>`；消费接口可用 admin token
+    或订阅 API key（`X-API-Key`）；注入接口用来源自身的密钥（HMAC 或 Bearer）。
+  version: 0.1.0
+servers:
+  - url: http://localhost:8080
+
+tags:
+  - name: ingest
+  - name: consume
+  - name: admin
+  - name: ops
+
+paths:
+  /webhooks/github:
+    post:
+      tags: [ingest]
+      summary: GitHub Webhook 注入
+      description: |
+        使用来源 `github` 的密钥校验 `X-Hub-Signature-256`，按 `X-GitHub-Event`
+        与 payload 的 `action` 归一为 `github.<event>[.<action>]`，
+        以 `X-GitHub-Delivery` 去重。
+      parameters:
+        - in: header
+          name: X-Hub-Signature-256
+          required: true
+          schema: { type: string }
+        - in: header
+          name: X-GitHub-Event
+          required: true
+          schema: { type: string }
+          example: pull_request
+        - in: header
+          name: X-GitHub-Delivery
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, description: 原始 GitHub payload，原样保存 }
+      responses:
+        '202':
+          description: 已接收并持久化
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IngestResponse' }
+        '200':
+          description: 重复事件（dedupe_key 命中），未重复扇出
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IngestResponse' }
+        '400':
+          description: 缺少 X-GitHub-Event 或 payload 非 JSON
+        '401':
+          description: 签名校验失败
+
+  /v1/ingest/{source}:
+    post:
+      tags: [ingest]
+      summary: 通用事件注入
+      parameters:
+        - in: path
+          name: source
+          required: true
+          schema: { type: string }
+        - in: header
+          name: Authorization
+          schema: { type: string, example: 'Bearer <source secret>' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/IngestRequest' }
+      responses:
+        '202':
+          description: 已接收
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IngestResponse' }
+        '401':
+          description: 来源鉴权失败
+        '404':
+          description: 来源未注册
+
+  /v1/streams:
+    get:
+      tags: [consume]
+      summary: 列出流与全局序号
+      security: [{ adminToken: [] }, { apiKey: [] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  streams:
+                    type: object
+                    additionalProperties: { type: integer, format: int64 }
+                  global_seq: { type: integer, format: int64 }
+
+  /v1/streams/{stream}/events:
+    get:
+      tags: [consume]
+      summary: 按游标拉取事件（支持 long-poll）
+      description: |
+        `after`：具体流按 `stream_seq` 比较；`all` 按全局 `seq` 比较。
+        `wait`：>0 时挂起等待新事件（无新事件则超时返回空列表）。
+      security: [{ adminToken: [] }, { apiKey: [] }]
+      parameters:
+        - in: path
+          name: stream
+          required: true
+          schema: { type: string }
+          example: github
+        - in: query
+          name: after
+          schema: { type: integer, format: int64, default: 0 }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 100, maximum: 1000 }
+        - in: query
+          name: wait
+          schema: { type: string, example: 30s }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListResult' }
+
+  /v1/events/{id}:
+    get:
+      tags: [consume]
+      summary: 按 id 查询事件
+      security: [{ adminToken: [] }, { apiKey: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Event' }
+        '404':
+          description: 不存在
+
+  /v1/subscriptions/{id}/ack:
+    post:
+      tags: [consume]
+      summary: 提交消费位点（只前进）
+      security: [{ adminToken: [] }, { apiKey: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [cursor]
+              properties:
+                cursor: { type: integer, format: int64 }
+      responses:
+        '200':
+          description: 更新后的订阅
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Subscription' }
+        '401':
+          description: 凭据不匹配该订阅
+
+  /v1/sources:
+    get:
+      tags: [admin]
+      summary: 列出来源
+      security: [{ adminToken: [] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sources:
+                    type: array
+                    items: { $ref: '#/components/schemas/Source' }
+
+  /v1/sources/{id}:
+    put:
+      tags: [admin]
+      summary: 创建或更新来源
+      description: 省略的字段保留原值（已有 secret 不会被清空）。
+      security: [{ adminToken: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                kind: { type: string, enum: [webhook, api] }
+                secret: { type: string }
+                verify_mode: { type: string, enum: [hmac_sha256, bearer, none] }
+                type_prefix: { type: string }
+                default_stream: { type: string }
+                enabled: { type: boolean }
+      responses:
+        '200':
+          description: 保存后的来源
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Source' }
+    delete:
+      tags: [admin]
+      summary: 删除来源
+      security: [{ adminToken: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '204': { description: 已删除 }
+        '404': { description: 不存在 }
+
+  /v1/subscriptions:
+    get:
+      tags: [admin]
+      summary: 列出订阅
+      security: [{ adminToken: [] }]
+      parameters:
+        - in: query
+          name: delivery
+          schema: { type: string, enum: [push, pull] }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  subscriptions:
+                    type: array
+                    items: { $ref: '#/components/schemas/Subscription' }
+    post:
+      tags: [admin]
+      summary: 创建订阅
+      description: 未提供 secret 时自动生成，且仅在本次响应中返回一次。
+      security: [{ adminToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id: { type: string }
+                name: { type: string }
+                stream: { type: string, default: all }
+                type_filters:
+                  type: array
+                  items: { type: string }
+                  example: ["github.pull_request.*"]
+                provider_filters:
+                  type: array
+                  items: { type: string }
+                subject_pattern: { type: string, example: "repo:kaulie/*" }
+                delivery: { type: string, enum: [push, pull], default: push }
+                endpoint: { type: string, description: push 必填 }
+                secret: { type: string }
+      responses:
+        '201':
+          description: 已创建
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  subscription: { $ref: '#/components/schemas/Subscription' }
+                  secret: { type: string }
+                  secret_generated: { type: boolean }
+        '400':
+          description: 参数非法（如 push 缺少 endpoint）
+
+  /v1/subscriptions/{id}:
+    delete:
+      tags: [admin]
+      summary: 删除订阅（含其投递队列）
+      security: [{ adminToken: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '204': { description: 已删除 }
+
+  /v1/subscriptions/{id}/pause:
+    post:
+      tags: [admin]
+      summary: 暂停投递（仍继续入队，resume 后按序补投）
+      security: [{ adminToken: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Subscription' }
+
+  /v1/subscriptions/{id}/resume:
+    post:
+      tags: [admin]
+      summary: 恢复投递
+      security: [{ adminToken: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Subscription' }
+
+  /v1/deliveries:
+    get:
+      tags: [admin]
+      summary: 查询投递记录（含 DLQ）
+      security: [{ adminToken: [] }]
+      parameters:
+        - in: query
+          name: subscription_id
+          schema: { type: string }
+        - in: query
+          name: status
+          schema: { type: string, enum: [pending, inflight, delivered, dead] }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 100 }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deliveries:
+                    type: array
+                    items: { $ref: '#/components/schemas/Delivery' }
+
+  /v1/deliveries/requeue:
+    post:
+      tags: [admin]
+      summary: 重投失败的投递（默认重投 dead）
+      security: [{ adminToken: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                subscription_id: { type: string }
+                status: { type: string, default: dead }
+                limit: { type: integer, default: 100 }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  requeued: { type: integer }
+
+  /healthz:
+    get:
+      tags: [ops]
+      summary: 存活探针
+      responses:
+        '200': { description: OK }
+  /readyz:
+    get:
+      tags: [ops]
+      summary: 就绪探针（探测数据库）
+      responses:
+        '200': { description: OK }
+        '503': { description: 数据库不可用 }
+  /metrics:
+    get:
+      tags: [ops]
+      summary: Prometheus 指标
+      responses:
+        '200':
+          description: OK
+          content:
+            text/plain:
+              schema: { type: string }
+
+components:
+  securitySchemes:
+    adminToken:
+      type: http
+      scheme: bearer
+    apiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+
+  schemas:
+    Event:
+      type: object
+      properties:
+        seq: { type: integer, format: int64, description: 全局单调递增 }
+        stream_seq: { type: integer, format: int64, description: 流内单调递增 }
+        id: { type: string, example: evt_01J8Q7ZC4K9W2M3N4P5Q6R7S }
+        stream: { type: string, example: github }
+        provider: { type: string, example: github }
+        type: { type: string, example: github.pull_request.opened }
+        subject: { type: string, example: 'repo:kaulie/event-center' }
+        source_time: { type: string, format: date-time, nullable: true }
+        received_at: { type: string, format: date-time }
+        dedupe_key: { type: string }
+        headers:
+          type: object
+          additionalProperties: { type: string }
+        data_type: { type: string, default: application/json }
+        data: { description: 原始负载，原样保存 }
+    IngestRequest:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          description: 省略 provider 前缀时自动补 type_prefix，如 deploy.finished → cicd.deploy.finished
+        provider: { type: string, description: 默认取来源 id }
+        stream: { type: string, description: 默认取来源的 default_stream }
+        subject: { type: string }
+        source_time: { type: string, format: date-time }
+        dedupe_key: { type: string }
+        data_type: { type: string }
+        headers:
+          type: object
+          additionalProperties: { type: string }
+        data: { description: 任意 JSON；非 JSON 会以字符串形式保留 }
+    IngestResponse:
+      type: object
+      properties:
+        status: { type: string, enum: [accepted, duplicate] }
+        duplicate: { type: boolean }
+        event: { $ref: '#/components/schemas/Event' }
+    ListResult:
+      type: object
+      properties:
+        events:
+          type: array
+          items: { $ref: '#/components/schemas/Event' }
+        next_cursor: { type: integer, format: int64 }
+        has_more: { type: boolean }
+    Source:
+      type: object
+      properties:
+        id: { type: string }
+        kind: { type: string }
+        verify_mode: { type: string }
+        type_prefix: { type: string }
+        default_stream: { type: string }
+        enabled: { type: boolean }
+        has_secret: { type: boolean }
+        created_at: { type: string, format: date-time }
+    Subscription:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        stream: { type: string }
+        type_filters:
+          type: array
+          items: { type: string }
+        provider_filters:
+          type: array
+          items: { type: string }
+        subject_pattern: { type: string }
+        delivery: { type: string, enum: [push, pull] }
+        endpoint: { type: string }
+        status: { type: string, enum: [active, paused, disabled] }
+        cursor: { type: integer, format: int64 }
+        has_secret: { type: boolean }
+        created_at: { type: string, format: date-time }
+    Delivery:
+      type: object
+      properties:
+        subscription_id: { type: string }
+        event_seq: { type: integer, format: int64 }
+        attempt: { type: integer }
+        status: { type: string, enum: [pending, inflight, delivered, dead] }
+        last_error: { type: string }
+        next_retry_at: { type: string, format: date-time, nullable: true }
+        updated_at: { type: string, format: date-time }

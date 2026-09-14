@@ -1,0 +1,17 @@
+# Build output
+/bin/
+/data/
+# A stray root-level binary, if anyone builds with `go build ./cmd/eventd`.
+# Anchored on purpose: an unanchored "eventd" would also ignore cmd/eventd/.
+/eventd
+
+# SQLite runtime files
+*.db
+*.db-shm
+*.db-wal
+
+# Editor / OS noise
+.DS_Store
+.idea/
+.vscode/
+*.swp
