@@ -98,23 +98,38 @@ GitHub means adding an nginx vhost in front of `127.0.0.1:9099` and pointing the
 GitHub webhook at `http(s)://<host>/github-events-ingress` (`/webhooks/github`
 remains as an alias for existing hooks).
 
-## Rollback
+## Reset / archive the event log
 
-The whole deployment is a single static binary plus a SQLite file, and nothing
-pre-existing on the host is touched:
+The database is the only thing here that git cannot reproduce, so it is moved
+aside, never deleted. **Recreate the directory afterwards**: the unit's
+`ReadWritePaths` must exist or systemd fails at namespace setup
+(`status=226/NAMESPACE`) and the service cannot start at all.
 
 ```bash
-# stop, then drop in a previous eventd binary and start again
 ssh cloud-server 'systemctl stop event-center'
-scp ./eventd.previous cloud-server:/opt/event-center/eventd
+ssh cloud-server 'mv /opt/event-center/data /opt/event-center/data.$(date -u +%Y%m%dT%H%M%SZ).bak'
+ssh cloud-server 'install -d -m 0755 /opt/event-center/data'   # required, see above
 ssh cloud-server 'systemctl start event-center'
 ```
 
-Keep a copy of the binary you are replacing before you overwrite it. **Never
-delete** `/opt/event-center/data` — that directory is the event log, and it is
-the only thing here that is not reproducible from git. Move it aside if you
-ever need a clean slate:
+Optionally archive the audit trail at the same time (the service recreates the
+file on start, so moving it is safe):
 
 ```bash
-ssh cloud-server 'mv /opt/event-center/data /opt/event-center/data.$(date +%s).bak'
+ssh cloud-server 'mv /var/log/event-center/ingress.jsonl /var/log/event-center/ingress.$(date -u +%Y%m%dT%H%M%SZ).bak.jsonl'
+```
+
+After the reset `sources` is empty, but the `github` source is re-seeded from
+`EVENTD_GITHUB_SECRET` on the next start; sequences restart at 1.
+
+## Rollback a binary
+
+Keep a copy of the binary you are replacing before you overwrite it:
+
+```bash
+ssh cloud-server 'cp /opt/event-center/eventd /opt/event-center/eventd.previous'
+# ... then, to go back:
+ssh cloud-server 'systemctl stop event-center'
+scp ./eventd.previous cloud-server:/opt/event-center/eventd
+ssh cloud-server 'systemctl start event-center'
 ```
