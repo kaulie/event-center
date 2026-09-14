@@ -131,22 +131,47 @@ curl -sS -o /dev/null -w '%{http_code}\n' \
 
 ## The GitHub webhook
 
-Live URL: **`https://event-center.115-190-153-53.sslip.io/github-events-ingress`**
-(secret: the value of `EVENTD_GITHUB_SECRET`).
+Live URL: **`https://115.190.153.53/github-events-ingress`**
+(secret: the value of `EVENTD_GITHUB_SECRET`; `insecure_ssl=1`, see below).
+
+### Why the URL uses the IP and not a hostname
+
+This host sits behind a policy that **resets traffic carrying an unfiled domain
+name** — it inspects the TLS SNI (and the plain-HTTP `Host` header) and kills the
+connection, so `https://<name>.sslip.io` is unreachable from outside while the
+literal IP works. Measured:
+
+| Request | Result |
+|---|---|
+| `http://<ip>/…` with `Host: event-center.<ip>.sslip.io` | connection reset |
+| `http://<ip>/…` with `Host: <ip>` | 301 (fine) |
+| `https://<ip>/…` (no SNI) | 200 (fine) |
+| `https://event-center.<ip>.sslip.io/…` (SNI = hostname) | connection reset |
+
+The vhost therefore serves both names, but the webhook must use the IP. The
+certificate names the sslip host, so a client connecting by IP cannot verify the
+name — hence `insecure_ssl=1` on the hook. Payload authenticity does not depend
+on it: the HMAC signature over the body is what proves the sender.
+
+> **Certificate renewal will fail while the policy is in place**, because the
+> Let's Encrypt HTTP-01 challenge fetches `http://<host>/.well-known/…` with the
+> domain as `Host`. The current certificate expires 2026-12-13; since clients
+> connect by IP with `insecure_ssl=1`, an expired/self-signed certificate keeps
+> working — but do not expect the renewal timer to succeed.
 
 > **Changing the hook: always send the whole `config` object.**
 > GitHub's `PATCH /repos/{owner}/{repo}/hooks/{id}` **replaces** `config`, so a
 > request containing only `config[url]` silently drops the hook's `secret` and
 > resets `content_type` to the legacy form encoding. Deliveries then arrive
 > unsigned and are rejected with 401 (`missing signature header`). This actually
-> happened while moving the hook to HTTPS. Use:
+> happened while moving the hook. Use:
 >
 > ```bash
 > gh api -X PATCH repos/<owner>/<repo>/hooks/<id> \
->   -f 'config[url]=https://event-center.115-190-153-53.sslip.io/github-events-ingress' \
+>   -f 'config[url]=https://115.190.153.53/github-events-ingress' \
 >   -f 'config[content_type]=json' \
 >   -f 'config[secret]=<the EVENTD_GITHUB_SECRET value>' \
->   -f 'config[insecure_ssl]=0'
+>   -f 'config[insecure_ssl]=1'
 > ```
 >
 > Verify afterwards with `POST /repos/<owner>/<repo>/hooks/<id>/tests` and check
