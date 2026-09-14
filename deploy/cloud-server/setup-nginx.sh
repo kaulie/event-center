@@ -17,21 +17,26 @@ EC_IP="${EC_IP:-115.190.153.53}"
 EC_TLS_HOST="${EC_TLS_HOST:-event-center.$(echo "$EC_IP" | tr . -).sslip.io}"
 EC_ACME_WEBROOT="${EC_ACME_WEBROOT:-/var/www/acme}"
 EC_LE_EMAIL="${EC_LE_EMAIL:-}"
+# 对外边缘端口（安全组已放行；443 被厂商策略拦，故用独立端口）与应用的
+# 回环端口。两者必须不同：nginx 绑 __EDGE_PORT__，应用绑 127.0.0.1:__APP_PORT__。
+EC_EDGE_PORT="${EC_EDGE_PORT:-9099}"
+EC_APP_PORT="${EC_APP_PORT:-9095}"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SSH=(ssh -o BatchMode=yes -o ConnectTimeout=15 "$EC_HOST")
 SCP=(scp -q -o BatchMode=yes)
 
-echo "==> edge host: $EC_TLS_HOST   (+ IP $EC_IP)  → 127.0.0.1:9099"
+echo "==> edge: https://$EC_IP:$EC_EDGE_PORT  (port $EC_EDGE_PORT → app 127.0.0.1:$EC_APP_PORT)"
 "${SCP[@]}" "$ROOT/deploy/cloud-server/nginx/event-center-acme.conf" "$EC_HOST:/tmp/ec-acme.conf"
 "${SCP[@]}" "$ROOT/deploy/cloud-server/nginx/event-center-tls.conf" "$EC_HOST:/tmp/ec-tls.conf"
 
-"${SSH[@]}" bash -s -- "$EC_TLS_HOST" "$EC_ACME_WEBROOT" "$EC_IP" "$EC_LE_EMAIL" <<'REMOTE'
+"${SSH[@]}" bash -s -- "$EC_TLS_HOST" "$EC_ACME_WEBROOT" "$EC_IP" "$EC_EDGE_PORT" "$EC_APP_PORT" "$EC_LE_EMAIL" <<'REMOTE'
 set -euo pipefail
-# 注意参数顺序：可选且可能为空的 EMAIL 放最后，并用 ${4:-} 取值。
+# 注意参数顺序：可选且可能为空的 EMAIL 放最后，并用 ${6:-} 取值。
 # ssh 会把参数用空格拼接后再交给远端 shell 解析，中间的**空参数会被丢掉**，
 # 若把可空参数放在中间，后面的参数会整体前移（这里踩过）。
-HOST_NAME="${1:?tls host required}"; WEBROOT="${2:?webroot required}"; IP_ADDR="${3:?ip required}"; EMAIL="${4:-}"
+HOST_NAME="${1:?tls host required}"; WEBROOT="${2:?webroot required}"; IP_ADDR="${3:?ip required}"
+EDGE_PORT="${4:?edge port required}"; APP_PORT="${5:?app port required}"; EMAIL="${6:-}"
 
 command -v nginx >/dev/null || { echo "nginx is not installed" >&2; exit 1; }
 command -v certbot >/dev/null || { echo "certbot is not installed" >&2; exit 1; }
@@ -53,12 +58,13 @@ else
   echo "  certificate already present, leaving it alone"
 fi
 
-# 3. HTTPS block (serves both the sslip name and the literal IP).
-sed -e "s/__TLS_HOST__/$HOST_NAME/g" -e "s/__TLS_IP__/$IP_ADDR/g" /tmp/ec-tls.conf \
+# 3. HTTPS block（同时服务域名与字面 IP，并监听独立的对外端口）。
+sed -e "s/__TLS_HOST__/$HOST_NAME/g" -e "s/__TLS_IP__/$IP_ADDR/g" \
+    -e "s/__EDGE_PORT__/$EDGE_PORT/g" -e "s/__APP_PORT__/$APP_PORT/g" /tmp/ec-tls.conf \
   > /etc/nginx/conf.d/event-center.conf
 nginx -t
 systemctl reload nginx
-echo "  tls block installed and nginx reloaded"
+echo "  tls block installed (edge :$EDGE_PORT → app 127.0.0.1:$APP_PORT) and nginx reloaded"
 
 rm -f /tmp/ec-acme.conf /tmp/ec-tls.conf
 echo "  done. public entry: https://$HOST_NAME"
