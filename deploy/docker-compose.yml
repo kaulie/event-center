@@ -1,0 +1,28 @@
+services:
+  event-center:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: event-center:dev
+    ports:
+      - "8080:8080"
+    environment:
+      # Set a real token before exposing this service anywhere.
+      EVENTD_ADMIN_TOKEN: ${EVENTD_ADMIN_TOKEN:-dev-admin-token}
+      # Seeds the `github` source on first start; the GitHub webhook secret.
+      EVENTD_GITHUB_SECRET: ${EVENTD_GITHUB_SECRET:-}
+      # 0 keeps events forever.
+      EVENTD_RETENTION_DAYS: "0"
+      EVENTD_PUSH_MAX_ATTEMPTS: "6"
+    volumes:
+      - event-center-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+volumes:
+  event-center-data:
