@@ -65,10 +65,21 @@ GitHub webhook at `https://<host>/webhooks/github`.
 
 ## Rollback
 
-The service is a single static binary plus a SQLite file:
+The whole deployment is a single static binary plus a SQLite file, and nothing
+pre-existing on the host is touched:
 
 ```bash
+# stop, then drop in a previous eventd binary and start again
 ssh cloud-server 'systemctl stop event-center'
-# restore a previous binary, or just:
-ssh cloud-server 'rm -rf /opt/event-center/data'   # destructive: drops all events
+scp ./eventd.previous cloud-server:/opt/event-center/eventd
+ssh cloud-server 'systemctl start event-center'
+```
+
+Keep a copy of the binary you are replacing before you overwrite it. **Never
+delete** `/opt/event-center/data` — that directory is the event log, and it is
+the only thing here that is not reproducible from git. Move it aside if you
+ever need a clean slate:
+
+```bash
+ssh cloud-server 'mv /opt/event-center/data /opt/event-center/data.$(date +%s).bak'
 ```

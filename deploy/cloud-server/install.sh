@@ -54,10 +54,28 @@ echo "==> uploading to $EC_HOST"
 "${SCP[@]}" "$ROOT/deploy/cloud-server/$EC_UNIT" "$EC_HOST:/tmp/$EC_UNIT"
 
 echo "==> installing into $EC_APP_DIR (bind $EC_BIND:$EC_PORT)"
-"${SSH[@]}" bash -s -- "$EC_APP_DIR" "$EC_BIND" "$EC_PORT" "$EC_UNIT" "${EVENTD_GITHUB_SECRET:-}" <<'REMOTE'
+"${SSH[@]}" bash -s -- "$EC_APP_DIR" "$EC_BIND" "$EC_PORT" "$EC_UNIT" "${EVENTD_GITHUB_SECRET:-}" "${EC_FORCE:-}" <<'REMOTE'
 set -euo pipefail
-APP_DIR="$1"; BIND="$2"; PORT="$3"; UNIT="$4"; GH_SECRET="${5:-}"
+APP_DIR="$1"; BIND="$2"; PORT="$3"; UNIT="$4"; GH_SECRET="${5:-}"; FORCE="${6:-}"
 
+# Safety: never adopt (and therefore never overwrite) a directory that is not
+# ours. Existing deployments are recognised by their own files, so upgrades keep
+# working while a name collision with somebody else's data is refused.
+if [ -d "$APP_DIR" ] && [ -n "$(ls -A "$APP_DIR" 2>/dev/null)" ]; then
+  if [ ! -f "$APP_DIR/event-center.env" ] && [ ! -f "$APP_DIR/eventd" ]; then
+    if [ "$FORCE" != "1" ]; then
+      echo "refusing to install into $APP_DIR: it exists and was not created by"
+      echo "this installer (no eventd/event-center.env inside)."
+      echo "Set EC_FORCE=1 to override, or choose another EC_APP_DIR."
+      exit 3
+    fi
+    echo "WARNING: EC_FORCE=1, installing into a pre-existing directory $APP_DIR"
+  fi
+fi
+
+# Nothing below deletes anything. `install -d` only creates missing paths and
+# the only files written are eventd, event-center.env (first run only) and the
+# systemd unit.
 install -d -m 0755 "$APP_DIR" "$APP_DIR/data"
 install -m 0755 /tmp/eventd.new "$APP_DIR/eventd"
 
