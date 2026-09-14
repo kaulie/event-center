@@ -22,15 +22,16 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SSH=(ssh -o BatchMode=yes -o ConnectTimeout=15 "$EC_HOST")
 SCP=(scp -q -o BatchMode=yes)
 
-echo "==> edge host: $EC_TLS_HOST  (proxying to 127.0.0.1:9099)"
+echo "==> edge host: $EC_TLS_HOST   (+ IP $EC_IP)  → 127.0.0.1:9099"
 "${SCP[@]}" "$ROOT/deploy/cloud-server/nginx/event-center-acme.conf" "$EC_HOST:/tmp/ec-acme.conf"
 "${SCP[@]}" "$ROOT/deploy/cloud-server/nginx/event-center-tls.conf" "$EC_HOST:/tmp/ec-tls.conf"
 
-"${SSH[@]}" bash -s -- "$EC_TLS_HOST" "$EC_ACME_WEBROOT" "$EC_LE_EMAIL" <<'REMOTE'
+"${SSH[@]}" bash -s -- "$EC_TLS_HOST" "$EC_ACME_WEBROOT" "$EC_IP" "$EC_LE_EMAIL" <<'REMOTE'
 set -euo pipefail
-# "${3:-}" style defaults: ssh joins its arguments with spaces before the remote
-# shell parses them, so a trailing empty argument simply disappears.
-HOST_NAME="${1:?tls host required}"; WEBROOT="${2:?webroot required}"; EMAIL="${3:-}"
+# 注意参数顺序：可选且可能为空的 EMAIL 放最后，并用 ${4:-} 取值。
+# ssh 会把参数用空格拼接后再交给远端 shell 解析，中间的**空参数会被丢掉**，
+# 若把可空参数放在中间，后面的参数会整体前移（这里踩过）。
+HOST_NAME="${1:?tls host required}"; WEBROOT="${2:?webroot required}"; IP_ADDR="${3:?ip required}"; EMAIL="${4:-}"
 
 command -v nginx >/dev/null || { echo "nginx is not installed" >&2; exit 1; }
 command -v certbot >/dev/null || { echo "certbot is not installed" >&2; exit 1; }
@@ -52,8 +53,9 @@ else
   echo "  certificate already present, leaving it alone"
 fi
 
-# 3. HTTPS block.
-sed "s/__TLS_HOST__/$HOST_NAME/g" /tmp/ec-tls.conf > /etc/nginx/conf.d/event-center.conf
+# 3. HTTPS block (serves both the sslip name and the literal IP).
+sed -e "s/__TLS_HOST__/$HOST_NAME/g" -e "s/__TLS_IP__/$IP_ADDR/g" /tmp/ec-tls.conf \
+  > /etc/nginx/conf.d/event-center.conf
 nginx -t
 systemctl reload nginx
 echo "  tls block installed and nginx reloaded"
