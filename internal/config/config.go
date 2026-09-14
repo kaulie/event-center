@@ -28,6 +28,12 @@ type Config struct {
 	PushPollInterval   time.Duration
 	DispatcherDisabled bool
 
+	// Ingress audit trail. Rejected requests have no other copy anywhere, so
+	// they are always logged in enough detail to trace why data did not arrive.
+	IngressLogBody    bool   // log raw bodies of accepted requests too
+	IngressLogBodyMax int    // truncate captured bodies to this many bytes
+	IngressLogPath    string // append JSONL audit file ("" = journald only)
+
 	ShutdownTimeout time.Duration
 }
 
@@ -45,6 +51,9 @@ func Load() (*Config, error) {
 		PushBatchSize:      envInt("EVENTD_PUSH_BATCH_SIZE", 50),
 		PushMaxAttempts:    envInt("EVENTD_PUSH_MAX_ATTEMPTS", 6),
 		DispatcherDisabled: envBool("EVENTD_DISPATCHER_DISABLED", false),
+		IngressLogBody:     envBool("EVENTD_INGRESS_LOG_BODY", false),
+		IngressLogBodyMax:  envInt("EVENTD_INGRESS_LOG_BODY_MAX", 8192),
+		IngressLogPath:     env("EVENTD_INGRESS_LOG_PATH", ""),
 	}
 
 	var err error
@@ -78,6 +87,9 @@ func Load() (*Config, error) {
 	}
 	if c.PushMaxAttempts <= 0 {
 		c.PushMaxAttempts = 6
+	}
+	if c.IngressLogBodyMax <= 0 {
+		c.IngressLogBodyMax = 8192
 	}
 	return c, nil
 }

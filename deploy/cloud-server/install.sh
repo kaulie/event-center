@@ -52,6 +52,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
 echo "==> uploading to $EC_HOST"
 "${SCP[@]}" /tmp/eventd.new "$EC_HOST:/tmp/eventd.new"
 "${SCP[@]}" "$ROOT/deploy/cloud-server/$EC_UNIT" "$EC_HOST:/tmp/$EC_UNIT"
+"${SCP[@]}" "$ROOT/deploy/cloud-server/logrotate-event-center" "$EC_HOST:/tmp/logrotate-event-center"
 
 echo "==> installing into $EC_APP_DIR (bind $EC_BIND:$EC_PORT)"
 "${SSH[@]}" bash -s -- "$EC_APP_DIR" "$EC_BIND" "$EC_PORT" "$EC_UNIT" "${EVENTD_GITHUB_SECRET:-}" "${EC_FORCE:-}" <<'REMOTE'
@@ -79,8 +80,25 @@ fi
 install -d -m 0755 "$APP_DIR" "$APP_DIR/data"
 install -m 0755 /tmp/eventd.new "$APP_DIR/eventd"
 
-# Secrets file: created once, never overwritten, never uploaded.
+# Ingress audit trail lives outside the app dir so logrotate can manage it and
+# so it is obvious this is evidence, not state.
+LOG_DIR=/var/log/event-center
+AUDIT_FILE="$LOG_DIR/ingress.jsonl"
+install -d -m 0750 "$LOG_DIR"
+touch "$AUDIT_FILE"
+chmod 0600 "$AUDIT_FILE"
+install -m 0644 /tmp/logrotate-event-center /etc/logrotate.d/event-center
+
 ENV_FILE="$APP_DIR/event-center.env"
+
+# ensure_env adds KEY on first sight without ever clobbering an existing value.
+ensure_env() { # KEY VALUE
+  if ! grep -q "^$1=" "$ENV_FILE" 2>/dev/null; then
+    echo "$1=$2" >> "$ENV_FILE"
+    echo "  + $1"
+  fi
+}
+
 if [ ! -f "$ENV_FILE" ]; then
   TOKEN="$(openssl rand -hex 32)"
   umask 077
@@ -95,7 +113,7 @@ EOF
   echo "EVENTD_ADMIN_TOKEN=$TOKEN"
 else
   echo "keeping existing $ENV_FILE"
-  # Keep the listen address in sync with the requested port without clobbering secrets.
+  # Keep the listen address in sync with the requested port without touching secrets.
   if grep -q '^EVENTD_HTTP_ADDR=' "$ENV_FILE"; then
     sed -i "s|^EVENTD_HTTP_ADDR=.*|EVENTD_HTTP_ADDR=$BIND:$PORT|" "$ENV_FILE"
   else
@@ -104,6 +122,12 @@ else
   chmod 600 "$ENV_FILE"
 fi
 
+# Durable ingress audit trail: these are added on upgrade too, so an existing
+# deployment gains the audit file without its secrets being touched.
+ensure_env EVENTD_INGRESS_LOG_PATH "$AUDIT_FILE"
+ensure_env EVENTD_INGRESS_LOG_BODY_MAX 8192
+chmod 600 "$ENV_FILE"
+
 install -m 0644 /tmp/$UNIT /etc/systemd/system/$UNIT
 systemctl daemon-reload
 systemctl enable "$UNIT" >/dev/null 2>&1 || true
@@ -111,7 +135,16 @@ systemctl restart "$UNIT"
 sleep 2
 systemctl is-active "$UNIT"
 curl -s -m 5 "http://127.0.0.1:$PORT/healthz" && echo
-rm -f /tmp/eventd.new /tmp/$UNIT
+rm -f /tmp/eventd.new /tmp/$UNIT /tmp/logrotate-event-center
+
+if [ ! -d /var/log/journal ]; then
+  echo
+  echo "NOTE: journald is currently VOLATILE on this host (/var/log/journal is"
+  echo "missing), so 'journalctl -u event-center' only covers the current boot."
+  echo "The ingress audit trail above is unaffected — it is a real file."
+  echo "To also persist journald across reboots (host-wide, your call):"
+  echo "  mkdir -p /var/log/journal && systemd-tmpfiles --create --prefix /var/log/journal && systemctl restart systemd-journald"
+fi
 REMOTE
 
 echo "==> done"

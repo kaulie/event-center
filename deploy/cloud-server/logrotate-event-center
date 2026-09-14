@@ -1,0 +1,19 @@
+# Ingress audit trail for event-center.
+#
+# The service keeps this file open and appends JSON lines, so rotation must use
+# copytruncate: with "create" the process would keep writing to the rotated
+# inode and the new file would stay empty.
+#
+# This file is the durable record of what arrived at the ingress, including
+# requests that were rejected and therefore never stored anywhere else.
+/var/log/event-center/ingress.jsonl {
+    daily
+    rotate 90
+    size 100M
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+    create 0600 root root
+}

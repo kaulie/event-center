@@ -52,6 +52,38 @@ ssh cloud-server 'curl -s localhost:9099/healthz'
 ssh cloud-server 'curl -s localhost:9099/metrics | head'
 ```
 
+## Logs (ingress audit trail)
+
+Two complementary sinks:
+
+| Sink | What | Retention |
+|---|---|---|
+| journald | all service logs, incl. one line per ingest attempt | current boot only — see the warning below |
+| `/var/log/event-center/ingress.jsonl` | one JSON line per ingress attempt (accepted / duplicate / rejected / error) | 0600, logrotate: daily, 100M cap, 90 rotations, compressed |
+
+```bash
+ssh cloud-server 'journalctl -u event-center -n 50 --no-pager'
+ssh cloud-server 'grep "\"outcome\":\"rejected\"" /var/log/event-center/ingress.jsonl | tail'
+ssh cloud-server 'grep "\"request_id\":\"<github-delivery-id>\"" /var/log/event-center/ingress.jsonl'
+```
+
+The unit disables journald rate limiting (`LogRateLimitIntervalSec=0`): audit
+lines are evidence and must not be silently dropped under a traffic burst.
+logrotate uses `copytruncate` because the service keeps the file open — do not
+change that to `create`, or the process would keep writing to the rotated inode.
+
+> **journald on this host is volatile.** `/var/log/journal` does not exist, so
+> `journalctl` history is lost on reboot. That is why the audit file exists as a
+> real, rotating file. Enabling persistent journald is a host-wide change and is
+> deliberately left to you:
+>
+> ```bash
+> ssh cloud-server 'mkdir -p /var/log/journal && systemd-tmpfiles --create --prefix /var/log/journal && systemctl restart systemd-journald'
+> ```
+
+To also capture the raw payload of *accepted* requests (rejected ones are always
+captured), set `EVENTD_INGRESS_LOG_BODY=true` in `event-center.env`.
+
 ## Reachability
 
 - `BIND=127.0.0.1` (default): reachable on the host only — use an SSH tunnel

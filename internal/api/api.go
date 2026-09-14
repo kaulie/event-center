@@ -27,6 +27,11 @@ type Config struct {
 	PullMaxSize     int
 	PullWaitMax     time.Duration
 	Version         string
+
+	// Ingress audit trail.
+	IngressLogBody    bool
+	IngressLogBodyMax int
+	IngressLogPath    string
 }
 
 // Server holds the HTTP dependencies.
@@ -36,6 +41,7 @@ type Server struct {
 	metrics *metrics.Registry
 	log     *slog.Logger
 	cfg     Config
+	audit   *auditWriter
 }
 
 // New builds a Server.
@@ -49,16 +55,34 @@ func New(svc *service.Service, reg *metrics.Registry, log *slog.Logger, cfg Conf
 	if cfg.PullWaitMax <= 0 {
 		cfg.PullWaitMax = 30 * time.Second
 	}
-	return &Server{svc: svc, store: svc.Store(), metrics: reg, log: log, cfg: cfg}
+	if cfg.IngressLogBodyMax <= 0 {
+		cfg.IngressLogBodyMax = 8192
+	}
+
+	audit, err := newAuditWriter(cfg.IngressLogPath)
+	if err != nil {
+		// A broken audit sink must not take the service down, but it is
+		// important enough to be loud about it.
+		log.Error("ingress audit file unavailable, falling back to journald only",
+			"path", cfg.IngressLogPath, "error", err)
+	} else if audit != nil {
+		log.Info("ingress audit log enabled", "path", cfg.IngressLogPath)
+	}
+
+	return &Server{svc: svc, store: svc.Store(), metrics: reg, log: log, cfg: cfg, audit: audit}
 }
+
+// Close releases the audit file handle.
+func (s *Server) Close() error { return s.audit.Close() }
 
 // Handler returns the fully wired HTTP handler.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
-	// Ingestion.
-	mux.HandleFunc("POST /webhooks/github", s.handleGitHubWebhook)
-	mux.HandleFunc("POST /v1/ingest/{source}", s.handleGenericIngest)
+	// Ingestion. These two routes carry the audit trail: every attempt is
+	// logged with its outcome, correlation id and payload fingerprint.
+	mux.Handle("POST /webhooks/github", s.ingressLog(http.HandlerFunc(s.handleGitHubWebhook)))
+	mux.Handle("POST /v1/ingest/{source}", s.ingressLog(http.HandlerFunc(s.handleGenericIngest)))
 
 	// Consumption.
 	mux.HandleFunc("GET /v1/streams", s.authConsume(s.handleListStreams))
@@ -95,12 +119,18 @@ func (s *Server) logRequests(next http.Handler) http.Handler {
 		next.ServeHTTP(rec, r)
 		s.metrics.Inc("eventd_http_requests_total",
 			map[string]string{"method": r.Method, "status": statusClass(rec.status)}, 1)
-		if r.URL.Path != "/healthz" && r.URL.Path != "/metrics" {
+		// Ingest routes have their own audit trail (see ingressLog); a second
+		// generic line would just double the volume.
+		if r.URL.Path != "/healthz" && r.URL.Path != "/metrics" && !isIngressPath(r.URL.Path) {
 			s.log.Info("http request",
 				"method", r.Method, "path", r.URL.Path,
 				"status", rec.status, "duration_ms", time.Since(start).Milliseconds())
 		}
 	})
+}
+
+func isIngressPath(path string) bool {
+	return strings.HasPrefix(path, "/webhooks/") || strings.HasPrefix(path, "/v1/ingest/")
 }
 
 func (s *Server) recoverPanic(next http.Handler) http.Handler {
