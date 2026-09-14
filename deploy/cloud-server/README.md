@@ -86,6 +86,49 @@ change that to `create`, or the process would keep writing to the rotated inode.
 To also capture the raw payload of *accepted* requests (rejected ones are always
 captured), set `EVENTD_INGRESS_LOG_BODY=true` in `event-center.env`.
 
+## Public HTTPS edge (nginx)
+
+The service listens on loopback; nginx terminates TLS and is the only public
+entry point. Set it up once with:
+
+```bash
+deploy/cloud-server/setup-nginx.sh                       # → event-center.<ip>.sslip.io
+EC_TLS_HOST=events.example.com deploy/cloud-server/setup-nginx.sh   # own domain
+```
+
+It adds two server blocks (**it never modifies other sites' configuration**):
+
+| File | Purpose |
+|---|---|
+| `/etc/nginx/conf.d/event-center-acme.conf` | HTTP-01 challenge on :80, kept for renewals |
+| `/etc/nginx/conf.d/event-center.conf` | :443 TLS, allowlist on the ingest path, proxy to `127.0.0.1:9099` |
+
+What the edge enforces:
+
+- **TLS** with a Let's Encrypt certificate (auto-renewed by the existing
+  certbot timer). The webhook URL becomes
+  `https://event-center.115-190-153-53.sslip.io/github-events-ingress`.
+- **GitHub-only ingestion**: `/github-events-ingress` allows only GitHub's
+  published hook ranges (`140.82.112.0/20`, `143.55.64.0/20`, `192.30.252.0/22`,
+  `185.199.108.0/22` + two IPv6 ranges) plus `127.0.0.1` for testing on the box.
+  This is the compensating control for the deliberately weak HMAC secret: a
+  guessed secret is useless from an address GitHub never sends from.
+- **`/metrics` localhost-only** — the application serves it unauthenticated (it
+  is built for a local scraper), so the restriction lives in the edge.
+- Everything else is proxied as-is and authenticated by the application
+  (admin token / subscription API key), with `X-Forwarded-For` set so the
+  ingress audit trail records the real caller.
+
+Verify from outside:
+
+```bash
+curl -sS https://event-center.115-190-153-53.sslip.io/healthz        # 200
+curl -sS -o /dev/null -w '%{http_code}\n' -X POST \
+  https://event-center.115-190-153-53.sslip.io/github-events-ingress # 403 (not a GitHub address)
+curl -sS -o /dev/null -w '%{http_code}\n' \
+  https://event-center.115-190-153-53.sslip.io/metrics               # 403
+```
+
 ## Reachability
 
 - `BIND=127.0.0.1` (default): reachable on the host only — use an SSH tunnel
