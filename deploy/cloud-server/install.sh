@@ -6,23 +6,42 @@
 # upgrades the binary and restarts the service without touching the database
 # or the secrets file.
 #
-#   deploy/cloud-server/install.sh                      # defaults: cloud-server, 127.0.0.1:9099
-#   PORT=9099 BIND=0.0.0.0 deploy/cloud-server/install.sh
+#   deploy/cloud-server/install.sh                            # cloud-server, 127.0.0.1:9099
+#   EC_PORT=9099 EC_BIND=0.0.0.0 deploy/cloud-server/install.sh
 #   EVENTD_GITHUB_SECRET=xxx deploy/cloud-server/install.sh   # seed the GitHub source
 #
 # Secrets: EVENTD_ADMIN_TOKEN is generated on the host the first time (never
 # transmitted, never committed) and stored in
 # /opt/event-center/event-center.env, mode 0600. Rotate it by editing that file
 # and restarting the unit.
+#
+# NOTE: every tunable is EC_-prefixed on purpose. Generic names like HOST and
+# PORT are commonly already set in CI/sandbox environments and silently
+# redirecting those would target the wrong host or the wrong port.
 set -euo pipefail
 
-HOST="${HOST:-cloud-server}"
-PORT="${PORT:-9099}"
-BIND="${BIND:-127.0.0.1}"
-APP_DIR="${APP_DIR:-/opt/event-center}"
-UNIT="event-center.service"
+EC_HOST="${EC_HOST:-cloud-server}"
+EC_PORT="${EC_PORT:-9099}"
+EC_BIND="${EC_BIND:-127.0.0.1}"
+EC_APP_DIR="${EC_APP_DIR:-/opt/event-center}"
+EC_UNIT="event-center.service"
+
+case "$EC_HOST" in
+  ""|0.0.0.0|"::"|localhost|127.0.0.1)
+    echo "EC_HOST must be an SSH target, got '$EC_HOST'" >&2
+    exit 1
+    ;;
+esac
+case "$EC_PORT" in
+  *[!0-9]*|"") echo "EC_PORT must be a number, got '$EC_PORT'" >&2; exit 1 ;;
+esac
+if [ "$EC_PORT" -lt 1024 ] || [ "$EC_PORT" -gt 65535 ]; then
+  echo "EC_PORT out of range: $EC_PORT" >&2
+  exit 1
+fi
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-SSH=(ssh -o BatchMode=yes -o ConnectTimeout=15 "$HOST")
+SSH=(ssh -o BatchMode=yes -o ConnectTimeout=15 "$EC_HOST")
 SCP=(scp -q -o BatchMode=yes)
 
 echo "==> building linux/amd64 binary"
@@ -30,12 +49,12 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
   -ldflags "-s -w -X main.version=$(git -C "$ROOT" describe --tags --always --dirty 2>/dev/null || echo dev)" \
   -o /tmp/eventd.new "$ROOT/cmd/eventd"
 
-echo "==> uploading to $HOST"
-"${SCP[@]}" /tmp/eventd.new "$HOST:/tmp/eventd.new"
-"${SCP[@]}" "$ROOT/deploy/cloud-server/$UNIT" "$HOST:/tmp/$UNIT"
+echo "==> uploading to $EC_HOST"
+"${SCP[@]}" /tmp/eventd.new "$EC_HOST:/tmp/eventd.new"
+"${SCP[@]}" "$ROOT/deploy/cloud-server/$EC_UNIT" "$EC_HOST:/tmp/$EC_UNIT"
 
-echo "==> installing into $APP_DIR (bind $BIND:$PORT)"
-"${SSH[@]}" bash -s -- "$APP_DIR" "$BIND" "$PORT" "$UNIT" "${EVENTD_GITHUB_SECRET:-}" <<'REMOTE'
+echo "==> installing into $EC_APP_DIR (bind $EC_BIND:$EC_PORT)"
+"${SSH[@]}" bash -s -- "$EC_APP_DIR" "$EC_BIND" "$EC_PORT" "$EC_UNIT" "${EVENTD_GITHUB_SECRET:-}" <<'REMOTE'
 set -euo pipefail
 APP_DIR="$1"; BIND="$2"; PORT="$3"; UNIT="$4"; GH_SECRET="${5:-}"
 
