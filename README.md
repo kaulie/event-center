@@ -39,7 +39,7 @@ curl -sX POST localhost:8080/v1/ingest/cicd \
 
 ### 注入 GitHub 事件
 
-把 GitHub Webhook 指向 `http(s)://<host>/github-events-ingress`，Secret 设为
+把 GitHub Webhook 指向 `https://event-center.115-190-153-53.sslip.io/github-events-ingress`，Secret 设为
 `EVENTD_GITHUB_SECRET`。事件会被自动归一到 `github.<event>[.<action>]`，
 并用 `X-GitHub-Delivery` 去重（GitHub 重投不会产生重复事件）。
 

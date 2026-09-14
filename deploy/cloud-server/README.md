@@ -129,6 +129,29 @@ curl -sS -o /dev/null -w '%{http_code}\n' \
   https://event-center.115-190-153-53.sslip.io/metrics               # 403
 ```
 
+## The GitHub webhook
+
+Live URL: **`https://event-center.115-190-153-53.sslip.io/github-events-ingress`**
+(secret: the value of `EVENTD_GITHUB_SECRET`).
+
+> **Changing the hook: always send the whole `config` object.**
+> GitHub's `PATCH /repos/{owner}/{repo}/hooks/{id}` **replaces** `config`, so a
+> request containing only `config[url]` silently drops the hook's `secret` and
+> resets `content_type` to the legacy form encoding. Deliveries then arrive
+> unsigned and are rejected with 401 (`missing signature header`). This actually
+> happened while moving the hook to HTTPS. Use:
+>
+> ```bash
+> gh api -X PATCH repos/<owner>/<repo>/hooks/<id> \
+>   -f 'config[url]=https://event-center.115-190-153-53.sslip.io/github-events-ingress' \
+>   -f 'config[content_type]=json' \
+>   -f 'config[secret]=<the EVENTD_GITHUB_SECRET value>' \
+>   -f 'config[insecure_ssl]=0'
+> ```
+>
+> Verify afterwards with `POST /repos/<owner>/<repo>/hooks/<id>/tests` and check
+> that the delivery answered 202 in the hook's *Recent Deliveries*.
+
 ## Reachability
 
 - `BIND=127.0.0.1` (default): reachable on the host only — use an SSH tunnel
