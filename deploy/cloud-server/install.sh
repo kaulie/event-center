@@ -21,7 +21,7 @@
 set -euo pipefail
 
 EC_HOST="${EC_HOST:-cloud-server}"
-EC_PORT="${EC_PORT:-9095}"   # 应用回环端口；对外边缘端口见 setup-nginx.sh（默认 9099）
+EC_PORT="${EC_PORT:-9099}"   # 应用回环端口（与 setup-nginx.sh 的默认代理目标一致）
 EC_BIND="${EC_BIND:-127.0.0.1}"
 EC_APP_DIR="${EC_APP_DIR:-/opt/event-center}"
 EC_UNIT="event-center.service"
