@@ -99,7 +99,7 @@ curl -sX POST localhost:8080/v1/subscriptions/sub_01J8.../ack \
 
 | Method | Path | 说明 | 鉴权 |
 |---|---|---|---|
-| POST | `/github-events-ingress` | GitHub 注入（HMAC 校验，按 delivery id 去重）；`/webhooks/github` 为兼容别名 | source secret |
+| POST | `/github-events-ingress` | GitHub 注入（HMAC 校验，按 delivery id 去重）—— 唯一入口 | source secret |
 | POST | `/v1/ingest/{source}` | 通用注入（信封体） | source secret |
 | GET | `/v1/streams` | 流列表 + 全局 seq | admin / api key |
 | GET | `/v1/streams/{stream}/events` | 拉取事件（`after`/`limit`/`wait`） | admin / api key |

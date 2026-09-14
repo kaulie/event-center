@@ -82,7 +82,7 @@ func TestIngressLogRecordsRejectionsWithReasonAndBody(t *testing.T) {
 	ts, _, _ := newTestServerFull(t, "", sink, "")
 
 	// Bad signature: nothing is persisted anywhere, so the body must be kept.
-	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/webhooks/github",
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/github-events-ingress",
 		bytes.NewBufferString(`{"repository":{"full_name":"kaulie/x"},"action":"opened"}`))
 	req.Header.Set("X-GitHub-Event", "push")
 	req.Header.Set("X-Hub-Signature-256", "sha256=deadbeef")
@@ -191,7 +191,7 @@ func TestIngressLogTruncatesHugeBodiesOnRejection(t *testing.T) {
 	})
 
 	huge := `{"repository":{"full_name":"kaulie/x"},"pad":"` + strings.Repeat("z", 500) + `"}`
-	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/webhooks/github", bytes.NewBufferString(huge))
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/github-events-ingress", bytes.NewBufferString(huge))
 	req.Header.Set("X-GitHub-Event", "push")
 	req.Header.Set("X-Hub-Signature-256", "sha256=bad")
 	resp, err := http.DefaultClient.Do(req)

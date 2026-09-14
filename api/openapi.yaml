@@ -26,8 +26,7 @@ paths:
         与 payload 的 `action` 归一为 `github.<event>[.<action>]`，
         以 `X-GitHub-Delivery` 去重。
 
-        这是仓库里配置的 Webhook 地址。`/webhooks/github` 保留为兼容别名，
-        行为完全一致（同一密钥校验）。
+        这是仓库里配置的 Webhook 地址，也是**唯一**接受 GitHub 投递的路径。
       parameters:
         - in: header
           name: X-Hub-Signature-256

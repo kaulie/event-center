@@ -84,7 +84,7 @@ func newTestServerOpts(t *testing.T, adminToken string, logSink io.Writer, audit
 
 func githubDelivery(t *testing.T, ts *httptest.Server, eventName, deliveryID, body string) (*http.Response, []byte) {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodPost, ts.URL+"/webhooks/github", bytes.NewBufferString(body))
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/github-events-ingress", bytes.NewBufferString(body))
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestGitHubWebhookIsIdempotentByDeliveryID(t *testing.T) {
 
 func TestGitHubWebhookRejectsBadSignature(t *testing.T) {
 	ts, _ := newTestServer(t, "")
-	req, err := http.NewRequest(http.MethodPost, ts.URL+"/webhooks/github",
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/github-events-ingress",
 		bytes.NewBufferString(`{"repository":{"full_name":"kaulie/x"}}`))
 	if err != nil {
 		t.Fatalf("build request: %v", err)
@@ -179,32 +179,45 @@ func TestGitHubWebhookRejectsBadSignature(t *testing.T) {
 	}
 }
 
-func TestGitHubWebhookServesConfiguredIngressPath(t *testing.T) {
+func TestGitHubWebhookServesOnlyTheConfiguredPath(t *testing.T) {
 	ts, _ := newTestServer(t, "")
 	body := `{"repository":{"full_name":"kaulie/autonomy"}}`
 
 	// This is the path the GitHub repository is configured with; it must work.
-	for _, path := range []string{"/github-events-ingress", "/webhooks/github"} {
-		req, err := http.NewRequest(http.MethodPost, ts.URL+path, bytes.NewBufferString(body))
-		if err != nil {
-			t.Fatalf("build request: %v", err)
-		}
-		req.Header.Set("X-GitHub-Event", "push")
-		req.Header.Set("X-GitHub-Delivery", "path-check-"+path)
-		req.Header.Set("X-Hub-Signature-256", verify.SignHMACSHA256(githubSecret, []byte(body)))
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/github-events-ingress",
+		bytes.NewBufferString(body))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("X-GitHub-Event", "push")
+	req.Header.Set("X-GitHub-Delivery", "path-check")
+	req.Header.Set("X-Hub-Signature-256", verify.SignHMACSHA256(githubSecret, []byte(body)))
 
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatalf("POST %s: %v", path, err)
-		}
-		payload, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusAccepted {
-			t.Fatalf("POST %s = %d, want 202: %s", path, resp.StatusCode, payload)
-		}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	payload, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("POST /github-events-ingress = %d, want 202: %s", resp.StatusCode, payload)
 	}
 
-	// A rejection on the canonical path must also be audited like any ingress.
+	// The retired alias must be gone: keeping dead entry points around widens
+	// the public surface for no benefit.
+	retired, _ := http.NewRequest(http.MethodPost, ts.URL+"/webhooks/github", bytes.NewBufferString(body))
+	retired.Header.Set("X-GitHub-Event", "push")
+	retired.Header.Set("X-Hub-Signature-256", verify.SignHMACSHA256(githubSecret, []byte(body)))
+	retiredResp, err := http.DefaultClient.Do(retired)
+	if err != nil {
+		t.Fatalf("retired path request: %v", err)
+	}
+	retiredResp.Body.Close()
+	if retiredResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("retired path /webhooks/github = %d, want 404", retiredResp.StatusCode)
+	}
+
+	// A rejection on the live path must still be audited like any ingress.
 	badReq, _ := http.NewRequest(http.MethodPost, ts.URL+"/github-events-ingress",
 		bytes.NewBufferString(body))
 	badReq.Header.Set("X-GitHub-Event", "push")
@@ -215,7 +228,7 @@ func TestGitHubWebhookServesConfiguredIngressPath(t *testing.T) {
 	}
 	badResp.Body.Close()
 	if badResp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("bad signature on canonical path = %d, want 401", badResp.StatusCode)
+		t.Fatalf("bad signature = %d, want 401", badResp.StatusCode)
 	}
 }
 
