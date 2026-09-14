@@ -95,8 +95,8 @@ captured), set `EVENTD_INGRESS_LOG_BODY=true` in `event-center.env`.
 
 GitHub webhooks require a **public HTTPS** endpoint, so exposing this service to
 GitHub means adding an nginx vhost in front of `127.0.0.1:9099` and pointing the
-GitHub webhook at `http(s)://<host>/github-events-ingress` (`/webhooks/github`
-remains as an alias for existing hooks).
+GitHub webhook at `http(s)://<host>/github-events-ingress` — the only path that
+accepts GitHub deliveries (retired paths are removed, not aliased).
 
 ## Reset / archive the event log
 

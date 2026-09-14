@@ -32,7 +32,8 @@ type githubPayload struct {
 	} `json:"sender"`
 }
 
-// handleGitHubWebhook implements POST /webhooks/github.
+// handleGitHubWebhook implements POST /github-events-ingress, the single entry
+// point the repository hook is configured with.
 //
 // The event type is derived from the X-GitHub-Event header ("push",
 // "pull_request", ...) and the payload action, producing names such as
