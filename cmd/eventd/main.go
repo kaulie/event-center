@@ -78,12 +78,16 @@ func run() error {
 	}
 
 	srv := api.New(svc, reg, log, api.Config{
-		AdminToken:      cfg.AdminToken,
-		PullDefaultSize: cfg.PullDefaultSize,
-		PullMaxSize:     cfg.PullMaxSize,
-		PullWaitMax:     cfg.PullWaitMax,
-		Version:         version,
+		AdminToken:        cfg.AdminToken,
+		PullDefaultSize:   cfg.PullDefaultSize,
+		PullMaxSize:       cfg.PullMaxSize,
+		PullWaitMax:       cfg.PullWaitMax,
+		Version:           version,
+		IngressLogBody:    cfg.IngressLogBody,
+		IngressLogBodyMax: cfg.IngressLogBodyMax,
+		IngressLogPath:    cfg.IngressLogPath,
 	})
+	defer func() { _ = srv.Close() }()
 	httpServer := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           srv.Handler(),

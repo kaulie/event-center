@@ -16,32 +16,42 @@ import (
 // source: POST /v1/ingest/{source}.
 func (s *Server) handleGenericIngest(w http.ResponseWriter, r *http.Request) {
 	sourceID := r.PathValue("source")
+	ingressMark(r, func(rec *ingressRecord) { rec.Source = sourceID })
+
 	src, err := s.store.GetSource(r.Context(), sourceID)
 	if errors.Is(err, store.ErrNotFound) {
+		ingressReject(r, "unknown source "+sourceID)
 		writeError(w, http.StatusNotFound, "unknown source "+sourceID)
 		return
 	}
 	if err != nil {
+		ingressReject(r, "source lookup failed")
 		writeError(w, http.StatusInternalServerError, "lookup source failed")
 		return
 	}
 	if !src.Enabled {
+		ingressReject(r, "source is disabled")
 		writeError(w, http.StatusForbidden, "source is disabled")
 		return
 	}
 
 	body, err := readBody(w, r)
 	if err != nil {
+		ingressReject(r, "body rejected: "+err.Error())
 		return
 	}
+	ingressCaptureBody(r, body)
+
 	if err := verify.Mode(src, body, lowercaseHeaders(r)); err != nil {
 		s.metrics.Inc("eventd_ingest_rejected_total", map[string]string{"provider": src.ID}, 1)
+		ingressReject(r, "authentication failed")
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
 
 	var req model.IngestRequest
 	if err := json.Unmarshal(body, &req); err != nil {
+		ingressReject(r, "invalid JSON body")
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
@@ -56,6 +66,7 @@ func (s *Server) handleGenericIngest(w http.ResponseWriter, r *http.Request) {
 	}
 	eventType := req.Type
 	if eventType == "" {
+		ingressReject(r, "type is required")
 		writeError(w, http.StatusBadRequest, "type is required")
 		return
 	}
@@ -84,9 +95,24 @@ func (s *Server) handleGenericIngest(w http.ResponseWriter, r *http.Request) {
 func (s *Server) respondIngest(w http.ResponseWriter, r *http.Request, ev *model.Event) {
 	stored, duplicate, err := s.svc.Ingest(r.Context(), ev)
 	if err != nil {
+		ingressReject(r, "persist failed: "+err.Error())
 		writeStoreError(w, err, "ingest")
 		return
 	}
+	ingressMark(r, func(rec *ingressRecord) {
+		rec.EventID = stored.ID
+		rec.Seq = stored.Seq
+		rec.StreamSeq = stored.StreamSeq
+		rec.Stream = stored.Stream
+		rec.Provider = stored.Provider
+		rec.Type = stored.Type
+		rec.DedupeKey = stored.DedupeKey
+		if duplicate {
+			rec.Outcome = outcomeDuplicate
+		} else {
+			rec.Outcome = outcomeAccepted
+		}
+	})
 	if duplicate {
 		writeJSON(w, http.StatusOK, model.IngestResponse{
 			Status:    "duplicate",

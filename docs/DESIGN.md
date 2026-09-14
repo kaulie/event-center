@@ -138,6 +138,11 @@ GitHub ──HMAC-SHA256──▶  POST /webhooks/github
 ## 9. 可观测性
 
 - `GET /healthz`、`GET /readyz`（探测 DB）、`GET /metrics`（Prometheus 文本格式）。
+- **入口审计**：每次注入（含被拒请求）都产生一条结构化记录，含 `request_id`
+  （回显在 `X-Request-ID`）、`outcome`、`reason`、body 指纹，成功时还带
+  `event_id`/`seq`。被拒请求额外保留原始 body——它在别处没有任何副本。
+  落点为 journald + 可选 JSONL 文件（`EVENTD_INGRESS_LOG_PATH`），后者独立于
+  journald 的轮转与保留策略，是本机"回溯数据问题"的可靠依据。
 - 关键指标：注入量（按 provider/stream/type）、去重量、注入失败、入队量、
   推送成功/重试/DLQ、待投递队列深度、全局 seq、各流 seq、HTTP 计数。
 - 结构化 JSON 日志（`log/slog`），含 method/path/status/duration_ms。

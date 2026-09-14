@@ -39,20 +39,26 @@ type githubPayload struct {
 // github.push or github.pull_request.opened. X-GitHub-Delivery is used as the
 // dedupe key so GitHub retries do not create duplicates.
 func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
+	ingressMark(r, func(rec *ingressRecord) { rec.Source = "github" })
+
 	src, err := s.store.GetSource(r.Context(), "github")
 	if errors.Is(err, store.ErrNotFound) {
+		ingressReject(r, "github source is not configured")
 		writeError(w, http.StatusServiceUnavailable, "github source is not configured")
 		return
 	}
 	if err != nil {
+		ingressReject(r, "source lookup failed")
 		writeError(w, http.StatusInternalServerError, "lookup source failed")
 		return
 	}
 
 	body, err := readBody(w, r)
 	if err != nil {
+		ingressReject(r, "body rejected: "+err.Error())
 		return
 	}
+	ingressCaptureBody(r, body)
 	headers := lowercaseHeaders(r)
 
 	// GitHub signs with the source secret; fall back to the global secret when
@@ -60,18 +66,21 @@ func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 	verifyErr := verify.HMACSHA256(src.Secret, body, headers["x-hub-signature-256"], headers["x-hub-signature"])
 	if verifyErr != nil {
 		s.metrics.Inc("eventd_ingest_rejected_total", map[string]string{"provider": "github"}, 1)
+		ingressReject(r, "signature verification failed: "+verifyErr.Error())
 		writeError(w, http.StatusUnauthorized, verifyErr.Error())
 		return
 	}
 
 	ghEvent := headers["x-github-event"]
 	if ghEvent == "" {
+		ingressReject(r, "missing X-GitHub-Event header")
 		writeError(w, http.StatusBadRequest, "missing X-GitHub-Event header")
 		return
 	}
 
 	var payload githubPayload
 	if err := json.Unmarshal(body, &payload); err != nil {
+		ingressReject(r, "invalid JSON payload")
 		writeError(w, http.StatusBadRequest, "invalid JSON payload")
 		return
 	}

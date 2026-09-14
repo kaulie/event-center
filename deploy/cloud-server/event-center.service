@@ -1,0 +1,33 @@
+[Unit]
+Description=event-center — unified event center (ingest + persistent log + pub/sub)
+Documentation=https://github.com/kaulie/event-center
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/event-center
+ExecStart=/opt/event-center/eventd
+# Secrets (EVENTD_ADMIN_TOKEN, EVENTD_GITHUB_SECRET, ...) live in this root-only
+# file, never in the unit and never in git. The leading "-" makes it optional so
+# the unit still starts (with the disabled-auth warning) if it is missing.
+EnvironmentFile=-/opt/event-center/event-center.env
+Restart=always
+RestartSec=2
+KillSignal=SIGTERM
+TimeoutStopSec=20
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+# The SQLite database is the only thing the service may write.
+ReadWritePaths=/opt/event-center/data /var/log/event-center
+LimitNOFILE=65535
+# The ingress audit trail is evidence: journald rate limits by default and would
+# silently drop lines under a burst of traffic, so it is disabled for this unit.
+LogRateLimitIntervalSec=0
+LogRateLimitBurst=0
+SyslogIdentifier=event-center
+
+[Install]
+WantedBy=multi-user.target

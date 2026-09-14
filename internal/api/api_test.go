@@ -25,6 +25,21 @@ const githubSecret = "github-webhook-secret"
 // newTestServer wires a real store, service and router backed by a temp file.
 func newTestServer(t *testing.T, adminToken string) (*httptest.Server, *store.Store) {
 	t.Helper()
+	ts, st, _ := newTestServerFull(t, adminToken, io.Discard, "")
+	return ts, st
+}
+
+// newTestServerFull additionally lets a test capture the structured log output
+// and point the ingress audit file somewhere.
+func newTestServerFull(t *testing.T, adminToken string, logSink io.Writer, auditPath string) (*httptest.Server, *store.Store, *api.Config) {
+	t.Helper()
+	return newTestServerOpts(t, adminToken, logSink, auditPath, nil)
+}
+
+// newTestServerOpts also lets a test tweak the HTTP config (e.g. enable body
+// logging) before the server is built.
+func newTestServerOpts(t *testing.T, adminToken string, logSink io.Writer, auditPath string, mutate func(*api.Config)) (*httptest.Server, *store.Store, *api.Config) {
+	t.Helper()
 	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "api.db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -44,21 +59,27 @@ func newTestServer(t *testing.T, adminToken string) (*httptest.Server, *store.St
 		t.Fatalf("seed source: %v", err)
 	}
 
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	log := slog.New(slog.NewTextHandler(logSink, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	// A single registry is shared by the service and the HTTP layer, exactly
 	// like in main(), so /metrics reports ingest and HTTP counters together.
 	reg := metrics.New()
 	svc := service.New(st, reg, log)
-	srv := api.New(svc, reg, log, api.Config{
+	cfg := api.Config{
 		AdminToken:      adminToken,
 		PullDefaultSize: 10,
 		PullMaxSize:     50,
 		PullWaitMax:     time.Second,
 		Version:         "test",
-	})
+		IngressLogPath:  auditPath,
+	}
+	if mutate != nil {
+		mutate(&cfg)
+	}
+	srv := api.New(svc, reg, log, cfg)
+	t.Cleanup(func() { _ = srv.Close() })
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
-	return ts, st
+	return ts, st, &cfg
 }
 
 func githubDelivery(t *testing.T, ts *httptest.Server, eventName, deliveryID, body string) (*http.Response, []byte) {

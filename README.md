@@ -121,6 +121,9 @@ curl -sX POST localhost:8080/v1/subscriptions/sub_01J8.../ack \
 | `EVENTD_ADMIN_TOKEN` | 空 | 管理接口 token；为空时不校验（仅开发） |
 | `EVENTD_GITHUB_SECRET` | 空 | 首次启动时据此播种 `github` 来源 |
 | `EVENTD_RETENTION_DAYS` | `0` | >0 时每日清理超期事件；0=永久保留 |
+| `EVENTD_INGRESS_LOG_PATH` | 空 | 入口审计 JSONL 落盘路径（空=只进 journald） |
+| `EVENTD_INGRESS_LOG_BODY` | `false` | 是否连**成功**请求的原始 body 也记入日志 |
+| `EVENTD_INGRESS_LOG_BODY_MAX` | `8192` | 记录 body 时的截断长度 |
 | `EVENTD_PULL_DEFAULT_LIMIT` / `EVENTD_PULL_MAX_LIMIT` | `100` / `1000` | 拉取分页 |
 | `EVENTD_PULL_WAIT_MAX` | `30s` | long-poll 上限 |
 | `EVENTD_PUSH_ENABLED` / `EVENTD_DISPATCHER_DISABLED` | `true` / `false` | 推送开关 |
@@ -144,6 +147,53 @@ make lint        # gofmt 检查 + go vet
 
 投递为 **at-least-once**：网络抖动或下游非 2xx 会重试，下游可能收到重复事件。
 请在消费侧按事件 `id`（或 `dedupe_key`）做幂等。**不提供 exactly-once。**
+
+## 入口审计日志（排查数据问题的关键）
+
+每个进入 event-center 的注入请求都会留下一条结构化记录，**无论成功还是被拒**：
+
+```json
+{"time":"2026-09-14T15:02:11.234Z","request_id":"d-1","path":"/webhooks/github",
+ "source":"github","status":202,"outcome":"accepted","duration_ms":1,
+ "remote_ip":"140.82.115.1","body_sha256":"9f2c…","body_bytes":78,
+ "event_id":"evt_01J8…","seq":42,"stream_seq":42,
+ "provider":"github","type":"github.push","dedupe_key":"d-1"}
+```
+
+字段用途：
+
+| 字段 | 排查什么 |
+|---|---|
+| `request_id` | 响应头 `X-Request-ID` 回显（优先用调用方的 `X-Request-ID`/`X-Correlation-ID`/`X-GitHub-Delivery`），可直接按它检索整条链路 |
+| `outcome` | `accepted` / `duplicate` / `rejected` / `error` |
+| `reason` | 被拒原因：签名校验失败、JSON 非法、来源未注册/被禁用、body 过大… |
+| `body_sha256` / `body_bytes` | 收到的原始负载指纹（用于确认"到底收到了什么"） |
+| `event_id` / `seq` | 成功时可直接去库里取回原文，或用 `/v1/events/{id}` 查 |
+| `body` | **被拒请求**会带原始 body（它没有任何其它副本）；成功请求默认不带（已在库里），可用 `EVENTD_INGRESS_LOG_BODY=true` 打开 |
+
+两种落点，互为补充：
+
+1. **journald**（`journalctl -u event-center`）—— 线上即时排障；
+2. **JSONL 审计文件**（`EVENTD_INGRESS_LOG_PATH`，部署脚本默认
+   `/var/log/event-center/ingress.jsonl`，0600，logrotate 保留 90 天、单文件 100M）
+   —— 独立于 journald 轮转与保留策略，**重启不丢**。
+
+> ⚠️ 注意：本机 `/var/log/journal` 默认不存在时 journald 是**易失**的（重启即丢），
+> 所以排查数据问题请以审计文件为准；该文件的 `copytruncate` 轮转方式是为
+> "进程持有 fd 持续追加" 这个场景专门选的，不要改成 `create`。
+
+排查示例：
+
+```bash
+# 最近被拒的请求及原因
+grep '"outcome":"rejected"' /var/log/event-center/ingress.jsonl | tail -20
+
+# 某个 GitHub delivery 是否收到、结果如何
+grep '"request_id":"<delivery-id>"' /var/log/event-center/ingress.jsonl
+
+# 某条事件是何时、从哪个 IP 进来的（拿到 request_id 后回查）
+curl -s localhost:9099/v1/events/evt_01J8... -H "Authorization: Bearer $TOKEN"
+```
 
 ## 现状与边界
 
