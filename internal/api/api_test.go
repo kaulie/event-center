@@ -179,10 +179,50 @@ func TestGitHubWebhookRejectsBadSignature(t *testing.T) {
 	}
 }
 
+func TestGitHubWebhookServesConfiguredIngressPath(t *testing.T) {
+	ts, _ := newTestServer(t, "")
+	body := `{"repository":{"full_name":"kaulie/autonomy"}}`
+
+	// This is the path the GitHub repository is configured with; it must work.
+	for _, path := range []string{"/github-events-ingress", "/webhooks/github"} {
+		req, err := http.NewRequest(http.MethodPost, ts.URL+path, bytes.NewBufferString(body))
+		if err != nil {
+			t.Fatalf("build request: %v", err)
+		}
+		req.Header.Set("X-GitHub-Event", "push")
+		req.Header.Set("X-GitHub-Delivery", "path-check-"+path)
+		req.Header.Set("X-Hub-Signature-256", verify.SignHMACSHA256(githubSecret, []byte(body)))
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("POST %s: %v", path, err)
+		}
+		payload, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusAccepted {
+			t.Fatalf("POST %s = %d, want 202: %s", path, resp.StatusCode, payload)
+		}
+	}
+
+	// A rejection on the canonical path must also be audited like any ingress.
+	badReq, _ := http.NewRequest(http.MethodPost, ts.URL+"/github-events-ingress",
+		bytes.NewBufferString(body))
+	badReq.Header.Set("X-GitHub-Event", "push")
+	badReq.Header.Set("X-Hub-Signature-256", "sha256=nope")
+	badResp, err := http.DefaultClient.Do(badReq)
+	if err != nil {
+		t.Fatalf("bad request: %v", err)
+	}
+	badResp.Body.Close()
+	if badResp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("bad signature on canonical path = %d, want 401", badResp.StatusCode)
+	}
+}
+
 func TestGitHubWebhookRequiresEventHeader(t *testing.T) {
 	ts, _ := newTestServer(t, "")
 	body := `{"repository":{"full_name":"kaulie/x"}}`
-	req, err := http.NewRequest(http.MethodPost, ts.URL+"/webhooks/github", bytes.NewBufferString(body))
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/github-events-ingress", bytes.NewBufferString(body))
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}

@@ -24,7 +24,7 @@ K8s 预留、先做 GitHub；全局 `seq` + `stream_seq` 双序号；单租户�
 ```
 外部事件源                      event-center                      下游消费方
 ──────────                     ─────────────                     ──────────
-GitHub ──HMAC-SHA256──▶  POST /webhooks/github
+GitHub ──HMAC-SHA256──▶  POST /github-events-ingress
 通用源 ──Bearer───────▶  POST /v1/ingest/{source}
                               │
                               ▼  归一化信封 → 去重 → 分配 seq/stream_seq

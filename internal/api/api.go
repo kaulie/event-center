@@ -17,6 +17,16 @@ import (
 	"github.com/kaulie/event-center/internal/store"
 )
 
+// GitHub webhook paths.
+//
+// The canonical path matches what the GitHub repository is configured with.
+// The legacy path is kept as an alias so an existing hook does not silently
+// start failing. Both are HMAC verified with the same source secret.
+const (
+	githubWebhookPath       = "/github-events-ingress"
+	githubWebhookLegacyPath = "/webhooks/github"
+)
+
 // maxBodyBytes caps accepted request bodies.
 const maxBodyBytes = 5 << 20
 
@@ -79,9 +89,10 @@ func (s *Server) Close() error { return s.audit.Close() }
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
-	// Ingestion. These two routes carry the audit trail: every attempt is
+	// Ingestion. These routes carry the audit trail: every attempt is
 	// logged with its outcome, correlation id and payload fingerprint.
-	mux.Handle("POST /webhooks/github", s.ingressLog(http.HandlerFunc(s.handleGitHubWebhook)))
+	mux.Handle("POST "+githubWebhookPath, s.ingressLog(http.HandlerFunc(s.handleGitHubWebhook)))
+	mux.Handle("POST "+githubWebhookLegacyPath, s.ingressLog(http.HandlerFunc(s.handleGitHubWebhook)))
 	mux.Handle("POST /v1/ingest/{source}", s.ingressLog(http.HandlerFunc(s.handleGenericIngest)))
 
 	// Consumption.
@@ -130,7 +141,10 @@ func (s *Server) logRequests(next http.Handler) http.Handler {
 }
 
 func isIngressPath(path string) bool {
-	return strings.HasPrefix(path, "/webhooks/") || strings.HasPrefix(path, "/v1/ingest/")
+	if strings.HasPrefix(path, "/v1/ingest/") {
+		return true
+	}
+	return path == githubWebhookPath || path == githubWebhookLegacyPath
 }
 
 func (s *Server) recoverPanic(next http.Handler) http.Handler {

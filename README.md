@@ -3,7 +3,7 @@
 统一事件中心：接收外部事件源（GitHub / K8s / 告警 / 任意系统）的事件注入，
 持久化为一条带时序编号的事件日志，并以 pub/sub 方式分发给下游。
 
-- **注入**：对外暴露 Webhook（`/webhooks/github`）与通用注入接口（`/v1/ingest/{source}`）
+- **注入**：对外暴露 Webhook（`/github-events-ingress`）与通用注入接口（`/v1/ingest/{source}`）
 - **持久化**：所有事件落库（SQLite + WAL），可查询、可回放
 - **类型化**：每个事件带 `provider`（生产者）+ `type`（如 `github.pull_request.opened`）
 - **时序递增**：全局 `seq` + 流内 `stream_seq`，下游可按游标拉取或订阅推送
@@ -39,7 +39,7 @@ curl -sX POST localhost:8080/v1/ingest/cicd \
 
 ### 注入 GitHub 事件
 
-把 GitHub Webhook 指向 `https://<host>/webhooks/github`，Secret 设为
+把 GitHub Webhook 指向 `http(s)://<host>/github-events-ingress`，Secret 设为
 `EVENTD_GITHUB_SECRET`。事件会被自动归一到 `github.<event>[.<action>]`，
 并用 `X-GitHub-Delivery` 去重（GitHub 重投不会产生重复事件）。
 
@@ -99,7 +99,7 @@ curl -sX POST localhost:8080/v1/subscriptions/sub_01J8.../ack \
 
 | Method | Path | 说明 | 鉴权 |
 |---|---|---|---|
-| POST | `/webhooks/github` | GitHub 注入（HMAC 校验，按 delivery id 去重） | source secret |
+| POST | `/github-events-ingress` | GitHub 注入（HMAC 校验，按 delivery id 去重）；`/webhooks/github` 为兼容别名 | source secret |
 | POST | `/v1/ingest/{source}` | 通用注入（信封体） | source secret |
 | GET | `/v1/streams` | 流列表 + 全局 seq | admin / api key |
 | GET | `/v1/streams/{stream}/events` | 拉取事件（`after`/`limit`/`wait`） | admin / api key |
@@ -153,7 +153,7 @@ make lint        # gofmt 检查 + go vet
 每个进入 event-center 的注入请求都会留下一条结构化记录，**无论成功还是被拒**：
 
 ```json
-{"time":"2026-09-14T15:02:11.234Z","request_id":"d-1","path":"/webhooks/github",
+{"time":"2026-09-14T15:02:11.234Z","request_id":"d-1","path":"/github-events-ingress",
  "source":"github","status":202,"outcome":"accepted","duration_ms":1,
  "remote_ip":"140.82.115.1","body_sha256":"9f2c…","body_bytes":78,
  "event_id":"evt_01J8…","seq":42,"stream_seq":42,
