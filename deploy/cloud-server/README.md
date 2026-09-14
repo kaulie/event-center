@@ -131,27 +131,37 @@ curl -sS -o /dev/null -w '%{http_code}\n' \
 
 ## The GitHub webhook
 
-Live URL: **`https://115.190.153.53/github-events-ingress`**
+Live URL: **`https://115.190.153.53:9099/github-events-ingress`**
 (secret: the value of `EVENTD_GITHUB_SECRET`; `insecure_ssl=1`, see below).
 
-### Why the URL uses the IP and not a hostname
+Ports on this host:
 
-This host sits behind a policy that **resets traffic carrying an unfiled domain
-name** — it inspects the TLS SNI (and the plain-HTTP `Host` header) and kills the
-connection, so `https://<name>.sslip.io` is unreachable from outside while the
-literal IP works. Measured:
+| Port | Who | Reachable from outside? |
+|---|---|---|
+| `9099` | nginx (edge, TLS) | **yes** — open in the security group |
+| `9095` | `eventd` (loopback only) | no |
+| `443` / `80` | nginx (the services above) | 443 is blocked by the provider for this host |
 
-| Request | Result |
-|---|---|
-| `http://<ip>/…` with `Host: event-center.<ip>.sslip.io` | connection reset |
-| `http://<ip>/…` with `Host: <ip>` | 301 (fine) |
-| `https://<ip>/…` (no SNI) | 200 (fine) |
-| `https://event-center.<ip>.sslip.io/…` (SNI = hostname) | connection reset |
+### Why the URL carries an explicit port and the IP
 
-The vhost therefore serves both names, but the webhook must use the IP. The
-certificate names the sslip host, so a client connecting by IP cannot verify the
-name — hence `insecure_ssl=1` on the hook. Payload authenticity does not depend
-on it: the HMAC signature over the body is what proves the sender.
+Two provider-level policies apply to this host, both measured:
+
+1. **Unfiled domain names are reset.** The policy inspects the TLS SNI (and the
+   plain-HTTP `Host` header) and kills the connection:
+
+   | Request | Result |
+   |---|---|
+   | `http://<ip>/…` with `Host: event-center.<ip>.sslip.io` | connection reset |
+   | `http://<ip>/…` with `Host: <ip>` | 301 (fine) |
+   | `https://<ip>/…` (no SNI) | 200 (fine) |
+   | `https://event-center.<ip>.sslip.io/…` (SNI = hostname) | connection reset |
+
+2. **443 became unreachable** even by IP, so the edge listens on `9099`
+   (already open in the security group) and the app sits on loopback `9095`.
+
+The certificate names the sslip host, so a client connecting by IP cannot verify
+it — hence `insecure_ssl=1`. Payload authenticity does not depend on it: the HMAC
+signature over the body is what proves the sender.
 
 > **Certificate renewal will fail while the policy is in place**, because the
 > Let's Encrypt HTTP-01 challenge fetches `http://<host>/.well-known/…` with the
