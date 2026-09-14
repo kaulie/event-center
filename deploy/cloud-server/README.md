@@ -131,33 +131,35 @@ curl -sS -o /dev/null -w '%{http_code}\n' \
 
 ## The GitHub webhook
 
-Live URL: **`https://115.190.153.53:9099/github-events-ingress`**
+Live URL: **`https://115.190.153.53/github-events-ingress`**
 (secret: the value of `EVENTD_GITHUB_SECRET`; `insecure_ssl=1`, see below).
 
-Ports on this host:
+Topology (the default, and what is running on the host):
 
 | Port | Who | Reachable from outside? |
 |---|---|---|
-| `9099` | nginx (edge, TLS) | **yes** — open in the security group |
-| `9095` | `eventd` (loopback only) | no |
-| `443` / `80` | nginx (the services above) | 443 is blocked by the provider for this host |
+| `443` | nginx (edge, TLS) | yes |
+| `9099` | `eventd`, loopback only | no |
+| `80` | nginx (ACME + redirect) | yes |
 
-### Why the URL carries an explicit port and the IP
+`setup-nginx.sh` can add a second public listener if 443 ever needs to be
+avoided: `EC_EDGE_PORT=9099 EC_APP_PORT=9095 deploy/cloud-server/setup-nginx.sh`
+(the app port must match what `install.sh` was given). The webhook URL then
+becomes `https://<ip>:9099/github-events-ingress`.
 
-Two provider-level policies apply to this host, both measured:
+### Why the URL uses the IP and not a hostname
 
-1. **Unfiled domain names are reset.** The policy inspects the TLS SNI (and the
-   plain-HTTP `Host` header) and kills the connection:
+The host sits behind a policy that **resets traffic carrying an unfiled domain
+name** — it inspects the TLS SNI (and the plain-HTTP `Host` header) and kills the
+connection, so `https://<name>.sslip.io` is unreachable from outside while the
+literal IP works. Measured:
 
-   | Request | Result |
-   |---|---|
-   | `http://<ip>/…` with `Host: event-center.<ip>.sslip.io` | connection reset |
-   | `http://<ip>/…` with `Host: <ip>` | 301 (fine) |
-   | `https://<ip>/…` (no SNI) | 200 (fine) |
-   | `https://event-center.<ip>.sslip.io/…` (SNI = hostname) | connection reset |
-
-2. **443 became unreachable** even by IP, so the edge listens on `9099`
-   (already open in the security group) and the app sits on loopback `9095`.
+| Request | Result |
+|---|---|
+| `http://<ip>/…` with `Host: event-center.<ip>.sslip.io` | connection reset |
+| `http://<ip>/…` with `Host: <ip>` | 301 (fine) |
+| `https://<ip>/…` (no SNI) | 200 (fine) |
+| `https://event-center.<ip>.sslip.io/…` (SNI = hostname) | connection reset |
 
 The certificate names the sslip host, so a client connecting by IP cannot verify
 it — hence `insecure_ssl=1`. Payload authenticity does not depend on it: the HMAC
