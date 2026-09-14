@@ -17,12 +17,14 @@ service bound to loopback and fronted by nginx when it needs to be public).
 ```bash
 cd <repo>
 deploy/cloud-server/install.sh                       # → 127.0.0.1:9099 (default)
-PORT=9099 BIND=0.0.0.0 deploy/cloud-server/install.sh
-EVENTD_GITHUB_SECRET=xxx deploy/cloud-server/install.sh   # seed the GitHub source
+EC_BIND=0.0.0.0 deploy/cloud-server/install.sh       # exposed on :9099 (open the cloud firewall first)
+EVENTD_GITHUB_SECRET=xxx deploy/cloud-server/install.sh   # set/rotate the GitHub webhook secret
 ```
 
 The installer is idempotent: it rebuilds, uploads, refreshes the unit and
-restarts the service. It never touches an existing database or secrets file.
+restarts the service. It never touches an existing database, and it never
+clears an existing secret — `EVENTD_GITHUB_SECRET` is only written when you
+pass it explicitly.
 
 ## Secrets
 

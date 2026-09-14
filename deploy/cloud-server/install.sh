@@ -99,6 +99,18 @@ ensure_env() { # KEY VALUE
   fi
 }
 
+# set_env replaces a key, used only for values the operator explicitly passed.
+# Built with grep+append rather than sed so arbitrary secrets (slashes, ampersands)
+# cannot break the substitution.
+set_env() { # KEY VALUE
+  local tmp
+  tmp="$(mktemp)"
+  grep -v "^$1=" "$ENV_FILE" 2>/dev/null > "$tmp" || true
+  printf '%s=%s\n' "$1" "$2" >> "$tmp"
+  cat "$tmp" > "$ENV_FILE"
+  rm -f "$tmp"
+}
+
 if [ ! -f "$ENV_FILE" ]; then
   TOKEN="$(openssl rand -hex 32)"
   umask 077
@@ -126,6 +138,13 @@ fi
 # deployment gains the audit file without its secrets being touched.
 ensure_env EVENTD_INGRESS_LOG_PATH "$AUDIT_FILE"
 ensure_env EVENTD_INGRESS_LOG_BODY_MAX 8192
+
+# The GitHub secret is only written when explicitly supplied on the command
+# line, so a routine upgrade never clears it.
+if [ -n "$GH_SECRET" ]; then
+  set_env EVENTD_GITHUB_SECRET "$GH_SECRET"
+  echo "  ~ EVENTD_GITHUB_SECRET updated (explicitly supplied)"
+fi
 chmod 600 "$ENV_FILE"
 
 install -m 0644 /tmp/$UNIT /etc/systemd/system/$UNIT
