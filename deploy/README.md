@@ -12,8 +12,14 @@
 | 制品存储 | `local` / `github_release` / `aliyun`（可插拔，由控制面负责上传下载；本机当前是 `aliyun`） |
 | 部署 | 下载制品 → `rsync -a --delete` 到 `runtimeDir` → 执行 `restartCmd` → 探活 `healthUrl` |
 | 保留路径 | **只有** `backend/.env`、`backend/data/`、`backend/runtime.pid`、`backend/server.log`、`backend/.watchdog-paused` 会在部署时保留，其余一律被包内容替换 |
-| 注入环境 | `restartCmd` 以 cwd=`runtimeDir` 执行，并注入 `PORT`（取自 healthUrl）、`RUNTIME_DIR`、`APP_VERSION` |
+| 注入环境 | `restartCmd` 以 cwd=`runtimeDir` 执行，并注入 `SERVICE_PORT`（取自服务契约的端口/healthUrl）、`RUNTIME_DIR`、`APP_VERSION` |
 | 健康检查 | 约定 `http://127.0.0.1:<port>/health`（应用同时保留 `/healthz`） |
+
+> **端口以 `SERVICE_PORT` 为准**：控制面按服务契约注入 `SERVICE_PORT`，`scripts/start.sh`
+> 优先读它（兼容旧名 `PORT`），读不到才退回脚本默认值。应用自身也认这个变量
+> （见 `internal/config`）：`EVENTD_HTTP_ADDR` > `SERVICE_PORT` > 内置默认。
+> 注意**不要**去读裸 `PORT`：CI/沙箱里它常已被别的服务占用（本机 `PORT=4211`），
+> 跟着它走会把服务绑到别人的端口上。
 
 ## 本项目的落地
 
