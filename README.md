@@ -147,6 +147,25 @@ make swagger        # 按代码里的注解重新生成 api/swagger.json
 make swagger-check  # 校验 api/swagger.json 与注解一致（CI 用，不一致即失败）
 ```
 
+### 打包/发版（build.sh）
+
+发版包由 `build.sh` 产出（`outputs/`，其中必须有 `outputs/scripts/restart.sh`，平台按
+「agent-control-plane-deployment」规范检查）。调用方是控制面 `packageFromGit`，或本机
+`/Users/gaolei/deployment/bin/release.sh event-center [ref]`：
+
+```bash
+APP_VERSION="$(git rev-parse --short=8 HEAD)" ./build.sh   # 产出 outputs/
+REGISTER_CONTRACT=0 APP_VERSION=dev ./build.sh             # 只打包，不登记契约
+```
+
+Go 构建缓存放在仓库**之外**，默认 `$XDG_CACHE_HOME/event-center-build-cache`（macOS 上即
+`~/.cache/event-center-build-cache`），可用 `EC_BUILD_CACHE` 覆盖。它必须落在不会被系统
+清理的目录：go 判断「工具链/模块是否已下载」只看目录在不在，缓存被清空成空目录骨架时它
+会直接报 `go: download go1.25.0: stat .../bin/go: no such file or directory`，而不是重新
+解包 —— 打包会次次失败。因此 `build.sh` 每次都会先体检缓存（丢掉没解包完整的工具链和
+空壳模块目录），并在报错指向缓存不完整时自动清掉解包产物重试一次
+（`SKIP_CACHE_RETRY=1` 可关掉重试）。首次打包（缓存为空）需要下载工具链与模块，之后是增量。
+
 ## 服务契约：注解即真源
 
 服务契约（对外 API + 元信息）**不手工维护规范文件**，而是写在代码里，用
