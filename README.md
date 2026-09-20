@@ -116,7 +116,8 @@ curl -sX POST localhost:8080/v1/subscriptions/sub_01J8.../ack \
 
 | 环境变量 | 默认 | 说明 |
 |---|---|---|
-| `EVENTD_HTTP_ADDR` | `:8080` | 监听地址 |
+| `EVENTD_HTTP_ADDR` | （未设置） | 监听地址（`host:port`）；优先级最高 |
+| `SERVICE_PORT` | （未设置） | 启动端口（仅端口，或 `host:port`）；部署控制面按服务契约注入。`EVENTD_HTTP_ADDR` 未设置时生效，两者都没有才用默认 `:8080` |
 | `EVENTD_DB_PATH` | `./data/eventd.db` | SQLite 路径（`:memory:` 用于测试） |
 | `EVENTD_ADMIN_TOKEN` | 空 | 管理接口 token；为空时不校验（仅开发） |
 | `EVENTD_GITHUB_SECRET` | 空 | 首次启动时据此播种 `github` 来源 |
@@ -132,6 +133,13 @@ curl -sX POST localhost:8080/v1/subscriptions/sub_01J8.../ack \
 | `EVENTD_PUSH_BASE_BACKOFF` / `EVENTD_PUSH_MAX_BACKOFF` | `2s` / `10m` | 重试退避 |
 | `EVENTD_PUSH_TIMEOUT` | `10s` | 单次投递超时 |
 | `EVENTD_PUSH_POLL_INTERVAL` | `1s` | 队列轮询间隔 |
+
+监听地址的取值顺序是 `EVENTD_HTTP_ADDR` → `SERVICE_PORT` → 内置默认 `:8080`，
+只有一个生效，启动日志里的 `addr_source` 会写明用的是哪一个。`SERVICE_PORT` 只给端口
+（`9099`）时主机名留空，进程绑定该端口的所有网卡；要限定回环，用 `EVENTD_HTTP_ADDR`
+写全 `host:port`（`scripts/start.sh` 就是这么做的：`127.0.0.1:${SERVICE_PORT}`）。
+变量设了但不可用（非数字/越界）时**不阻止启动**：退回默认并打一条 WARN，
+把被忽略的值原样写进日志——比反复重启、只看到健康检查一直失败要好排查。
 
 ## 开发
 

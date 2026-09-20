@@ -3,9 +3,9 @@
 # 启动 event-center —— 遵循部署系统规范的 runtime 脚本。
 #
 # 由控制面以 `restartCmd` 调用：cwd = runtimeDir，且注入
-#   PORT        = 服务契约 healthUrl 里的端口（本脚本据此绑定监听地址）
-#   RUNTIME_DIR = runtimeDir
-#   APP_VERSION = 本次部署的 8 位短 hash
+#   SERVICE_PORT = 服务契约里的服务端口（正式字段名；旧脚本兼容名 PORT 同值）
+#   RUNTIME_DIR  = runtimeDir
+#   APP_VERSION  = 本次部署的 8 位短 hash
 #
 # runtime 布局（backend/ 下的内容由平台在部署时保留，不会被 --delete 清掉）：
 #   bin/eventd              可执行文件（来自发版包）
@@ -19,7 +19,9 @@ set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUNTIME_DIR="${RUNTIME_DIR:-$(cd "${DIR}/.." && pwd)}"
-PORT="${PORT:-9099}"
+PORT="${SERVICE_PORT:-${PORT:-9099}}"   # SERVICE_PORT 是契约的正式字段名，优先它：
+                                         # PORT 是通用名，CI/沙箱里常已被占用（本机预设
+                                         # PORT=4211），取错值会把服务绑到别人的端口上。
 APP_VERSION="${APP_VERSION:-dev}"
 
 BIN="${RUNTIME_DIR}/bin/eventd"

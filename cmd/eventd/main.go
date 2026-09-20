@@ -41,6 +41,12 @@ func run() error {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(log)
 
+	// Reported here, not in config: Load runs before this handler exists.
+	if cfg.HTTPAddrWarning != "" {
+		log.Warn("listen address fallback",
+			"detail", cfg.HTTPAddrWarning, "addr", cfg.HTTPAddr, "addr_source", cfg.HTTPAddrSource)
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -96,8 +102,8 @@ func run() error {
 
 	errCh := make(chan error, 1)
 	go func() {
-		log.Info("event center listening", "addr", cfg.HTTPAddr, "version", version,
-			"db", cfg.DBPath)
+		log.Info("event center listening", "addr", cfg.HTTPAddr, "addr_source", cfg.HTTPAddrSource,
+			"version", version, "db", cfg.DBPath)
 		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
