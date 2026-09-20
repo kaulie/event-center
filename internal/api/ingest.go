@@ -14,6 +14,23 @@ import (
 
 // handleGenericIngest accepts a normalised event envelope from any registered
 // source: POST /v1/ingest/{source}.
+//
+// @Summary      通用事件注入
+// @Description  归一化事件信封 → 持久化 → 按订阅扇出（push 入队、pull 可拉取）。
+// @Description  省略 provider/stream 时取来源自身的默认值；type 省略 provider 前缀时自动补来源的 type_prefix。
+// @Tags         ingest
+// @Accept       json
+// @Produce      json
+// @Param        source  path  string               true  "来源 id"  example(cicd)
+// @Param        event   body  model.IngestRequest  true  "事件信封（type 必填）"
+// @Success      202  {object}  model.IngestResponse  "已接收"
+// @Success      200  {object}  model.IngestResponse  "重复事件（dedupe_key 命中）"
+// @Failure      400  {object}  api.ErrorResponse     "信封非法（如缺少 type）"
+// @Failure      401  {object}  api.ErrorResponse     "来源鉴权失败"
+// @Failure      403  {object}  api.ErrorResponse     "来源已禁用"
+// @Failure      404  {object}  api.ErrorResponse     "来源未注册"
+// @Security     SourceSecret
+// @Router       /v1/ingest/{source} [post]
 func (s *Server) handleGenericIngest(w http.ResponseWriter, r *http.Request) {
 	sourceID := r.PathValue("source")
 	ingressMark(r, func(rec *ingressRecord) { rec.Source = sourceID })

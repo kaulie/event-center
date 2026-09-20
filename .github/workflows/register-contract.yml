@@ -1,0 +1,46 @@
+# 契约自动登记（CI）：push 到 main / 发版时，**读代码里的 swag 注解 → 生成 OpenAPI → 登记到注册中心**。
+#
+# 与 build.sh 末尾调用的是同一条命令（client/ 是注册中心脚本的原样拷贝，见 client/README.md），
+# 幂等：规范没变化时 register.sh 会跳过 PUT，不刷 revision；实例集合按声明式对齐。
+#
+# ⚠️ runner：注册中心默认只绑 127.0.0.1:4240（写接口默认开放，刻意不暴露到网络），
+#    GitHub-hosted runner **够不到** —— 必须用跑在部署机上的 self-hosted runner。
+name: register-contract
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  register:
+    runs-on: [self-hosted, macOS]   # ← 必须是能直连注册中心（127.0.0.1:4240）的 runner
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: 安装 swag（从注解生成规范用）
+        run: go install github.com/swaggo/swag/cmd/swag@latest
+
+      - name: 校验 api/swagger.json 与注解一致（生成物没跟着注解更新就直接红）
+        run: make swagger-check
+
+      - name: 读注解 → 登记契约 + 实例（幂等）
+        env:
+          SERVICE_NAME: event-center
+          SWAG_MAIN: cmd/eventd/main.go   # 入口不是 ./cmd/<service>/main.go，必须显式给
+          SWAG_OUT: api                   # 跟仓库里提交的 api/swagger.json 同一份产物
+          SWAG_ARGS: --parseInternal --outputTypes json   # 与 make swagger 完全同参
+          REGISTRY_URL: http://127.0.0.1:4240
+          REGISTRY_NS: default
+          REGISTRY_TOKEN: ${{ secrets.REGISTRY_NS_TOKEN }}   # 写接口收紧后才需要
+          DEPARTMENT_ID: D0002            # 基础架构部（见 GET /v1/departments）
+          INSTANCES: 127.0.0.1:9099       # 部署契约里的服务端口，逗号分隔可给多个
+          OWNER: kaulie
+          HEALTH_PATH: /health
+          TAGS: events
+          VERSION: ${{ github.sha }}
+        run: bash client/ci/register-go-service.sh

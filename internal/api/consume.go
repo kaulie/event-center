@@ -20,6 +20,20 @@ import (
 // pseudo stream "all". When wait is set the request is held open (long poll)
 // until events arrive or the wait budget elapses, so consumers can tail the log
 // without busy looping.
+//
+// @Summary      按游标拉取事件（支持 long-poll）
+// @Description  `after`：具体流按 `stream_seq` 比较；`all` 按全局 `seq` 比较。
+// @Description  `wait`：>0 时挂起等待新事件（无新事件则超时返回空列表），不忙轮询。
+// @Tags         consume
+// @Produce      json
+// @Param        stream  path   string   true   "流名；`all` 匹配所有流"  example(github)
+// @Param        after   query  integer  false  "游标（默认 0）"  example(0)
+// @Param        limit   query  integer  false  "单次上限（默认 100，最大 1000）"  default(100)
+// @Param        wait    query  string   false  "long-poll 等待上限，如 30s（默认 0 = 立即返回）"  example(30s)
+// @Success      200  {object}  model.ListResult
+// @Security     AdminToken
+// @Security     ApiKey
+// @Router       /v1/streams/{stream}/events [get]
 func (s *Server) handlePull(w http.ResponseWriter, r *http.Request) {
 	stream := r.PathValue("stream")
 	after := int64(intQuery(r, "after", intQuery(r, "cursor", 0)))
@@ -69,6 +83,16 @@ func (s *Server) handlePull(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleGetEvent returns a single event by id.
+//
+// @Summary  按 id 查询事件
+// @Tags     consume
+// @Produce  json
+// @Param    id  path  string  true  "事件 id"  example(evt_01J8Q7ZC4K9W2M3N4P5Q6R7S)
+// @Success  200  {object}  model.Event
+// @Failure  404  {object}  api.ErrorResponse
+// @Security AdminToken
+// @Security ApiKey
+// @Router   /v1/events/{id} [get]
 func (s *Server) handleGetEvent(w http.ResponseWriter, r *http.Request) {
 	ev, err := s.store.GetEvent(r.Context(), r.PathValue("id"))
 	if err != nil {
@@ -79,6 +103,14 @@ func (s *Server) handleGetEvent(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleListStreams reports the known streams and the global sequence head.
+//
+// @Summary  列出流与全局序号
+// @Tags     consume
+// @Produce  json
+// @Success  200  {object}  api.StreamsResponse
+// @Security AdminToken
+// @Security ApiKey
+// @Router   /v1/streams [get]
 func (s *Server) handleListStreams(w http.ResponseWriter, r *http.Request) {
 	streams, err := s.store.ListStreams(r.Context())
 	if err != nil {
@@ -90,10 +122,10 @@ func (s *Server) handleListStreams(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err, "read stats")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"streams":    streams,
-		"global_seq": maxSeq,
-		"stream_all": model.StreamAll,
+	writeJSON(w, http.StatusOK, StreamsResponse{
+		Streams:   streams,
+		GlobalSeq: maxSeq,
+		StreamAll: model.StreamAll,
 	})
 }
 
@@ -103,6 +135,20 @@ func (s *Server) handleListStreams(w http.ResponseWriter, r *http.Request) {
 //
 // Callers authenticate with the admin token or with the subscription's own API
 // key, and the cursor only ever moves forward.
+//
+// @Summary  提交消费位点（只前进）
+// @Tags     consume
+// @Accept   json
+// @Produce  json
+// @Param    id   path  string          true  "订阅 id"
+// @Param    ack  body  api.AckRequest  true  "目标游标"
+// @Success  200  {object}  api.SubscriptionView  "更新后的订阅"
+// @Failure  400  {object}  api.ErrorResponse     "cursor 缺失或非法"
+// @Failure  401  {object}  api.ErrorResponse     "凭据不匹配该订阅"
+// @Failure  404  {object}  api.ErrorResponse     "订阅不存在"
+// @Security AdminToken
+// @Security ApiKey
+// @Router   /v1/subscriptions/{id}/ack [post]
 func (s *Server) handleAck(w http.ResponseWriter, r *http.Request) {
 	subID := r.PathValue("id")
 	sub, err := s.store.GetSubscription(r.Context(), subID)
@@ -127,9 +173,7 @@ func (s *Server) handleAck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req struct {
-		Cursor *int64 `json:"cursor"`
-	}
+	var req AckRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
@@ -147,7 +191,7 @@ func (s *Server) handleAck(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err, "reload subscription")
 		return
 	}
-	writeJSON(w, http.StatusOK, updated)
+	writeJSON(w, http.StatusOK, SubscriptionView{Subscription: *updated, HasSecret: updated.Secret != ""})
 }
 
 func (s *Server) waitDuration(r *http.Request) time.Duration {

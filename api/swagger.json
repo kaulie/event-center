@@ -1,0 +1,1289 @@
+{
+    "schemes": [
+        "http"
+    ],
+    "swagger": "2.0",
+    "info": {
+        "description": "统一事件中心：外部事件源注入 → 持久化 → pub/sub 分发（push webhook + cursor pull）。\n鉴权：管理接口用 `Authorization: Bearer \u003cadmin token\u003e`；消费接口可用 admin token 或订阅 API key（`X-API-Key`）；注入接口用来源自身的密钥（HMAC 或 Bearer）。",
+        "title": "event-center",
+        "contact": {},
+        "version": "0.1.0"
+    },
+    "host": "127.0.0.1:9099",
+    "basePath": "/",
+    "paths": {
+        "/github-events-ingress": {
+            "post": {
+                "security": [
+                    {
+                        "SourceSecret": []
+                    }
+                ],
+                "description": "用来源 `github` 的密钥校验 `X-Hub-Signature-256`，按 `X-GitHub-Event` 与 payload 的 `action`\n归一为 `github.\u003cevent\u003e[.\u003caction\u003e]`，并以 `X-GitHub-Delivery` 去重（GitHub 重投不产生重复事件）。\n这是仓库里配置的 Webhook 地址，也是**唯一**接受 GitHub 投递的路径。",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ingest"
+                ],
+                "summary": "GitHub Webhook 注入",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "HMAC-SHA256 签名（sha256=…）",
+                        "name": "X-Hub-Signature-256",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "example": "pull_request",
+                        "description": "GitHub 事件名",
+                        "name": "X-GitHub-Event",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "投递 id（去重键）",
+                        "name": "X-GitHub-Delivery",
+                        "in": "header"
+                    },
+                    {
+                        "description": "原始 GitHub payload，原样保存",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "重复事件（dedupe_key 命中），未重复扇出",
+                        "schema": {
+                            "$ref": "#/definitions/model.IngestResponse"
+                        }
+                    },
+                    "202": {
+                        "description": "已接收并持久化",
+                        "schema": {
+                            "$ref": "#/definitions/model.IngestResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "缺少 X-GitHub-Event 或 payload 非 JSON",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "签名校验失败",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/health": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ops"
+                ],
+                "summary": "存活探针",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/healthz": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ops"
+                ],
+                "summary": "存活探针",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/metrics": {
+            "get": {
+                "produces": [
+                    "text/plain"
+                ],
+                "tags": [
+                    "ops"
+                ],
+                "summary": "Prometheus 指标",
+                "responses": {
+                    "200": {
+                        "description": "Prometheus 文本指标",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/readyz": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ops"
+                ],
+                "summary": "就绪探针（探测数据库）",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "数据库不可用",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/deliveries": {
+            "get": {
+                "security": [
+                    {
+                        "AdminToken": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "查询投递记录（含 DLQ）",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "example": "sub_01J8Q7ZC4K9W2M3N4P5Q6R7S",
+                        "description": "只查某个订阅",
+                        "name": "subscription_id",
+                        "in": "query"
+                    },
+                    {
+                        "enum": [
+                            "pending",
+                            "inflight",
+                            "delivered",
+                            "dead"
+                        ],
+                        "type": "string",
+                        "description": "按投递状态过滤",
+                        "name": "status",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "default": 100,
+                        "description": "最多返回条数",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.DeliveriesResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/deliveries/requeue": {
+            "post": {
+                "security": [
+                    {
+                        "AdminToken": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "重投失败的投递（默认重投 dead）",
+                "parameters": [
+                    {
+                        "description": "过滤条件；省略即重投所有 dead",
+                        "name": "requeue",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/api.RequeueRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.RequeueResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/events/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "AdminToken": []
+                    },
+                    {
+                        "ApiKey": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "consume"
+                ],
+                "summary": "按 id 查询事件",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "example": "evt_01J8Q7ZC4K9W2M3N4P5Q6R7S",
+                        "description": "事件 id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/model.Event"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/ingest/{source}": {
+            "post": {
+                "security": [
+                    {
+                        "SourceSecret": []
+                    }
+                ],
+                "description": "归一化事件信封 → 持久化 → 按订阅扇出（push 入队、pull 可拉取）。\n省略 provider/stream 时取来源自身的默认值；type 省略 provider 前缀时自动补来源的 type_prefix。",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ingest"
+                ],
+                "summary": "通用事件注入",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "example": "cicd",
+                        "description": "来源 id",
+                        "name": "source",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "事件信封（type 必填）",
+                        "name": "event",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/model.IngestRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "重复事件（dedupe_key 命中）",
+                        "schema": {
+                            "$ref": "#/definitions/model.IngestResponse"
+                        }
+                    },
+                    "202": {
+                        "description": "已接收",
+                        "schema": {
+                            "$ref": "#/definitions/model.IngestResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "信封非法（如缺少 type）",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "来源鉴权失败",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "来源已禁用",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "来源未注册",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/sources": {
+            "get": {
+                "security": [
+                    {
+                        "AdminToken": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "列出来源",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.SourcesResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/sources/{id}": {
+            "put": {
+                "security": [
+                    {
+                        "AdminToken": []
+                    }
+                ],
+                "description": "省略的字段保留原值，所以更新时不写 secret 也不会把已有的密钥清掉。",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "创建或更新来源",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "example": "cicd",
+                        "description": "来源 id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "来源定义",
+                        "name": "source",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.SourceUpsertRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.SourceView"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "AdminToken": []
+                    }
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "删除来源",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "来源 id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/streams": {
+            "get": {
+                "security": [
+                    {
+                        "AdminToken": []
+                    },
+                    {
+                        "ApiKey": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "consume"
+                ],
+                "summary": "列出流与全局序号",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.StreamsResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/streams/{stream}/events": {
+            "get": {
+                "security": [
+                    {
+                        "AdminToken": []
+                    },
+                    {
+                        "ApiKey": []
+                    }
+                ],
+                "description": "`after`：具体流按 `stream_seq` 比较；`all` 按全局 `seq` 比较。\n`wait`：\u003e0 时挂起等待新事件（无新事件则超时返回空列表），不忙轮询。",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "consume"
+                ],
+                "summary": "按游标拉取事件（支持 long-poll）",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "example": "github",
+                        "description": "流名；`all` 匹配所有流",
+                        "name": "stream",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "example": 0,
+                        "description": "游标（默认 0）",
+                        "name": "after",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "default": 100,
+                        "description": "单次上限（默认 100，最大 1000）",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "example": "30s",
+                        "description": "long-poll 等待上限，如 30s（默认 0 = 立即返回）",
+                        "name": "wait",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/model.ListResult"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/subscriptions": {
+            "get": {
+                "security": [
+                    {
+                        "AdminToken": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "列出订阅",
+                "parameters": [
+                    {
+                        "enum": [
+                            "push",
+                            "pull"
+                        ],
+                        "type": "string",
+                        "description": "按投递方式过滤",
+                        "name": "delivery",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.SubscriptionsResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "AdminToken": []
+                    }
+                ],
+                "description": "push 必须给 endpoint；不给 secret 时生成一个，**只在这里返回一次**。",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "创建订阅",
+                "parameters": [
+                    {
+                        "description": "订阅定义",
+                        "name": "subscription",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.SubscriptionCreateRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/api.SubscriptionCreateResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "参数非法（如 push 缺少 endpoint）",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/subscriptions/{id}": {
+            "delete": {
+                "security": [
+                    {
+                        "AdminToken": []
+                    }
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "删除订阅（含其投递队列）",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "订阅 id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/subscriptions/{id}/ack": {
+            "post": {
+                "security": [
+                    {
+                        "AdminToken": []
+                    },
+                    {
+                        "ApiKey": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "consume"
+                ],
+                "summary": "提交消费位点（只前进）",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "订阅 id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "目标游标",
+                        "name": "ack",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.AckRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "更新后的订阅",
+                        "schema": {
+                            "$ref": "#/definitions/api.SubscriptionView"
+                        }
+                    },
+                    "400": {
+                        "description": "cursor 缺失或非法",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "凭据不匹配该订阅",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "订阅不存在",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/subscriptions/{id}/pause": {
+            "post": {
+                "security": [
+                    {
+                        "AdminToken": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "暂停投递（仍继续入队，resume 后按序补投）",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "订阅 id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.SubscriptionView"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/subscriptions/{id}/resume": {
+            "post": {
+                "security": [
+                    {
+                        "AdminToken": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "恢复投递",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "订阅 id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.SubscriptionView"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "definitions": {
+        "api.AckRequest": {
+            "type": "object",
+            "properties": {
+                "cursor": {
+                    "type": "integer",
+                    "example": 100
+                }
+            }
+        },
+        "api.DeliveriesResponse": {
+            "type": "object",
+            "properties": {
+                "deliveries": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.Delivery"
+                    }
+                }
+            }
+        },
+        "api.ErrorResponse": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "type": "string",
+                    "example": "unknown source github"
+                }
+            }
+        },
+        "api.RequeueRequest": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "example": 100
+                },
+                "status": {
+                    "type": "string",
+                    "enum": [
+                        "pending",
+                        "inflight",
+                        "delivered",
+                        "dead"
+                    ],
+                    "example": "dead"
+                },
+                "subscription_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.RequeueResponse": {
+            "type": "object",
+            "properties": {
+                "requeued": {
+                    "type": "integer",
+                    "example": 3
+                }
+            }
+        },
+        "api.SourceUpsertRequest": {
+            "type": "object",
+            "properties": {
+                "default_stream": {
+                    "type": "string",
+                    "example": "cicd"
+                },
+                "enabled": {
+                    "type": "boolean",
+                    "example": true
+                },
+                "kind": {
+                    "type": "string",
+                    "example": "webhook"
+                },
+                "secret": {
+                    "type": "string",
+                    "example": "s3cr3t"
+                },
+                "type_prefix": {
+                    "type": "string",
+                    "example": "cicd"
+                },
+                "verify_mode": {
+                    "type": "string",
+                    "enum": [
+                        "hmac_sha256",
+                        "bearer",
+                        "none"
+                    ],
+                    "example": "hmac_sha256"
+                }
+            }
+        },
+        "api.SourceView": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "default_stream": {
+                    "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "has_secret": {
+                    "type": "boolean"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "type_prefix": {
+                    "type": "string"
+                },
+                "verify_mode": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.SourcesResponse": {
+            "type": "object",
+            "properties": {
+                "sources": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.SourceView"
+                    }
+                }
+            }
+        },
+        "api.StreamsResponse": {
+            "type": "object",
+            "properties": {
+                "global_seq": {
+                    "type": "integer"
+                },
+                "stream_all": {
+                    "type": "string",
+                    "example": "all"
+                },
+                "streams": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer",
+                        "format": "int64"
+                    }
+                }
+            }
+        },
+        "api.SubscriptionCreateRequest": {
+            "type": "object",
+            "properties": {
+                "delivery": {
+                    "type": "string",
+                    "enum": [
+                        "push",
+                        "pull"
+                    ],
+                    "example": "push"
+                },
+                "endpoint": {
+                    "type": "string",
+                    "example": "https://ci.example.com/hooks/event-center"
+                },
+                "id": {
+                    "type": "string",
+                    "example": "sub_01J8Q7ZC4K9W2M3N4P5Q6R7S"
+                },
+                "name": {
+                    "type": "string",
+                    "example": "ci-on-main-push"
+                },
+                "provider_filters": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "example": [
+                        "github"
+                    ]
+                },
+                "secret": {
+                    "type": "string"
+                },
+                "stream": {
+                    "type": "string",
+                    "example": "github"
+                },
+                "subject_pattern": {
+                    "type": "string",
+                    "example": "repo:kaulie/*"
+                },
+                "type_filters": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "example": [
+                        "github.push"
+                    ]
+                }
+            }
+        },
+        "api.SubscriptionCreateResponse": {
+            "type": "object",
+            "properties": {
+                "has_secret": {
+                    "type": "boolean"
+                },
+                "secret": {
+                    "type": "string"
+                },
+                "secret_generated": {
+                    "type": "boolean"
+                },
+                "subscription": {
+                    "$ref": "#/definitions/api.SubscriptionView"
+                }
+            }
+        },
+        "api.SubscriptionView": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "cursor": {
+                    "type": "integer"
+                },
+                "delivery": {
+                    "type": "string"
+                },
+                "endpoint": {
+                    "type": "string"
+                },
+                "has_secret": {
+                    "type": "boolean"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "provider_filters": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "status": {
+                    "type": "string"
+                },
+                "stream": {
+                    "type": "string"
+                },
+                "subject_pattern": {
+                    "type": "string"
+                },
+                "type_filters": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "api.SubscriptionsResponse": {
+            "type": "object",
+            "properties": {
+                "subscriptions": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.SubscriptionView"
+                    }
+                }
+            }
+        },
+        "model.Delivery": {
+            "type": "object",
+            "properties": {
+                "attempt": {
+                    "type": "integer"
+                },
+                "event_seq": {
+                    "type": "integer"
+                },
+                "last_error": {
+                    "type": "string"
+                },
+                "next_retry_at": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "subscription_id": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.Event": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "description": "swaggertype keeps swag from choking on json.RawMessage when it builds the\ncontract from the annotations (the tag is inert at runtime).",
+                    "type": "object"
+                },
+                "data_type": {
+                    "type": "string"
+                },
+                "dedupe_key": {
+                    "type": "string"
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "id": {
+                    "type": "string"
+                },
+                "provider": {
+                    "type": "string"
+                },
+                "received_at": {
+                    "type": "string"
+                },
+                "seq": {
+                    "type": "integer"
+                },
+                "source_time": {
+                    "type": "string"
+                },
+                "stream": {
+                    "type": "string"
+                },
+                "stream_seq": {
+                    "type": "integer"
+                },
+                "subject": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.IngestRequest": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "description": "swaggertype: see the note on Event.Data.",
+                    "type": "object"
+                },
+                "data_type": {
+                    "type": "string"
+                },
+                "dedupe_key": {
+                    "type": "string"
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "provider": {
+                    "type": "string"
+                },
+                "source_time": {
+                    "type": "string"
+                },
+                "stream": {
+                    "type": "string"
+                },
+                "subject": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.IngestResponse": {
+            "type": "object",
+            "properties": {
+                "duplicate": {
+                    "type": "boolean"
+                },
+                "event": {
+                    "$ref": "#/definitions/model.Event"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.ListResult": {
+            "type": "object",
+            "properties": {
+                "events": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.Event"
+                    }
+                },
+                "has_more": {
+                    "type": "boolean"
+                },
+                "next_cursor": {
+                    "type": "integer"
+                }
+            }
+        }
+    },
+    "securityDefinitions": {
+        "AdminToken": {
+            "description": "`Bearer \u003cadmin token\u003e`（EVENTD_ADMIN_TOKEN；为空时管理接口不鉴权，仅开发）",
+            "type": "apiKey",
+            "name": "Authorization",
+            "in": "header"
+        },
+        "ApiKey": {
+            "description": "订阅自身的 key，用于消费接口与提交消费位点",
+            "type": "apiKey",
+            "name": "X-API-Key",
+            "in": "header"
+        },
+        "SourceSecret": {
+            "description": "`Bearer \u003csource secret\u003e`；GitHub 注入则用 HMAC 签名头 X-Hub-Signature-256",
+            "type": "apiKey",
+            "name": "Authorization",
+            "in": "header"
+        }
+    }
+}

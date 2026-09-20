@@ -25,6 +25,43 @@ import (
 // version is overridable at build time with -ldflags "-X main.version=...".
 var version = "dev"
 
+// General API Info for swag — the **single source of truth** of the HTTP
+// contract. `swag init -g cmd/eventd/main.go -o api` reads this block plus the
+// @Summary/@Tags/@Router annotations on every handler and writes api/swagger.json,
+// which `make swagger` refreshes and `client/ci/register-go-service.sh` reports to
+// the service registry. There is no hand maintained spec file to keep in sync.
+//
+// @title        event-center
+// @version      0.1.0
+// @description  统一事件中心：外部事件源注入 → 持久化 → pub/sub 分发（push webhook + cursor pull）。
+// @description  鉴权：管理接口用 `Authorization: Bearer <admin token>`；消费接口可用 admin token 或订阅 API key（`X-API-Key`）；注入接口用来源自身的密钥（HMAC 或 Bearer）。
+// @BasePath     /
+// @schemes      http
+// @host         127.0.0.1:9099
+//
+// @securityDefinitions.apikey  AdminToken
+// @in                          header
+// @name                        Authorization
+// @description                 `Bearer <admin token>`（EVENTD_ADMIN_TOKEN；为空时管理接口不鉴权，仅开发）
+//
+// @securityDefinitions.apikey  ApiKey
+// @in                          header
+// @name                        X-API-Key
+// @description                 订阅自身的 key，用于消费接口与提交消费位点
+//
+// @securityDefinitions.apikey  SourceSecret
+// @in                          header
+// @name                        Authorization
+// @description                 `Bearer <source secret>`；GitHub 注入则用 HMAC 签名头 X-Hub-Signature-256
+//
+// @tag.name         ingest
+// @tag.description  事件注入（webhook / 通用信封）
+// @tag.name         consume
+// @tag.description  游标消费与消费位点
+// @tag.name         admin
+// @tag.description  来源与订阅管理
+// @tag.name         ops
+// @tag.description  健康检查与指标
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "eventd:", err)
