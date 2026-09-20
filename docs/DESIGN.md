@@ -159,8 +159,10 @@ internal/filter/         订阅过滤（类型/来源/主体 glob）
 internal/verify/         Webhook 验签（HMAC / Bearer）
 internal/dispatch/       Push 投递：重试、退避、DLQ
 internal/api/            HTTP 路由、中间件、注入/消费/管理/健康
+internal/api/dto.go      接口的线上形态（注解引用它们生成契约）
 internal/metrics/        轻量 Prometheus 注册表（零依赖）
-api/openapi.yaml         接口契约
+api/swagger.json         接口契约（由 handler 上的 swag 注解生成；勿手改）
+client/                  服务契约登记脚本（注册中心 client/ 的原样拷贝，见 client/README.md）
 deploy/                  Dockerfile / docker-compose
 ```
 

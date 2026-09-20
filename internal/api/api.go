@@ -102,8 +102,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/subscriptions", s.authAdmin(s.handleListSubscriptions))
 	mux.HandleFunc("POST /v1/subscriptions", s.authAdmin(s.handleCreateSubscription))
 	mux.HandleFunc("DELETE /v1/subscriptions/{id}", s.authAdmin(s.handleDeleteSubscription))
-	mux.HandleFunc("POST /v1/subscriptions/{id}/pause", s.authAdmin(s.handleSetSubscriptionStatus(model.StatusPaused)))
-	mux.HandleFunc("POST /v1/subscriptions/{id}/resume", s.authAdmin(s.handleSetSubscriptionStatus(model.StatusActive)))
+	mux.HandleFunc("POST /v1/subscriptions/{id}/pause", s.authAdmin(s.handlePauseSubscription))
+	mux.HandleFunc("POST /v1/subscriptions/{id}/resume", s.authAdmin(s.handleResumeSubscription))
 	mux.HandleFunc("GET /v1/deliveries", s.authAdmin(s.handleListDeliveries))
 	mux.HandleFunc("POST /v1/deliveries/requeue", s.authAdmin(s.handleRequeueDeliveries))
 

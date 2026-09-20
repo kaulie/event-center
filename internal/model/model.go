@@ -116,7 +116,9 @@ type Event struct {
 	DedupeKey  string            `json:"dedupe_key,omitempty"`
 	Headers    map[string]string `json:"headers,omitempty"`
 	DataType   string            `json:"data_type"`
-	Data       json.RawMessage   `json:"data"`
+	// swaggertype keeps swag from choking on json.RawMessage when it builds the
+	// contract from the annotations (the tag is inert at runtime).
+	Data json.RawMessage `json:"data" swaggertype:"object"`
 }
 
 // Source describes an external event producer (github, k8s, ...).
@@ -169,7 +171,8 @@ type IngestRequest struct {
 	DedupeKey  string            `json:"dedupe_key"`
 	DataType   string            `json:"data_type"`
 	Headers    map[string]string `json:"headers"`
-	Data       json.RawMessage   `json:"data"`
+	// swaggertype: see the note on Event.Data.
+	Data json.RawMessage `json:"data" swaggertype:"object"`
 }
 
 // IngestResult is returned by every ingest endpoint.

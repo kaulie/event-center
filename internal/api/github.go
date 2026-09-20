@@ -39,6 +39,24 @@ type githubPayload struct {
 // "pull_request", ...) and the payload action, producing names such as
 // github.push or github.pull_request.opened. X-GitHub-Delivery is used as the
 // dedupe key so GitHub retries do not create duplicates.
+//
+// @Summary      GitHub Webhook 注入
+// @Description  用来源 `github` 的密钥校验 `X-Hub-Signature-256`，按 `X-GitHub-Event` 与 payload 的 `action`
+// @Description  归一为 `github.<event>[.<action>]`，并以 `X-GitHub-Delivery` 去重（GitHub 重投不产生重复事件）。
+// @Description  这是仓库里配置的 Webhook 地址，也是**唯一**接受 GitHub 投递的路径。
+// @Tags         ingest
+// @Accept       json
+// @Produce      json
+// @Param        X-Hub-Signature-256  header  string  true   "HMAC-SHA256 签名（sha256=…）"
+// @Param        X-GitHub-Event       header  string  true   "GitHub 事件名"   example(pull_request)
+// @Param        X-GitHub-Delivery    header  string  false  "投递 id（去重键）"
+// @Param        payload              body    object  true   "原始 GitHub payload，原样保存"
+// @Success      202  {object}  model.IngestResponse  "已接收并持久化"
+// @Success      200  {object}  model.IngestResponse  "重复事件（dedupe_key 命中），未重复扇出"
+// @Failure      400  {object}  api.ErrorResponse     "缺少 X-GitHub-Event 或 payload 非 JSON"
+// @Failure      401  {object}  api.ErrorResponse     "签名校验失败"
+// @Security     SourceSecret
+// @Router       /github-events-ingress [post]
 func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 	ingressMark(r, func(rec *ingressRecord) { rec.Source = "github" })
 

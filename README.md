@@ -9,7 +9,9 @@
 - **时序递增**：全局 `seq` + 流内 `stream_seq`，下游可按游标拉取或订阅推送
 - **Pub/Sub**：**push webhook**（重试 + 退避 + DLQ）+ **cursor pull**（long-poll）
 
-设计细节见 [`docs/DESIGN.md`](docs/DESIGN.md)，接口契约见 [`api/openapi.yaml`](api/openapi.yaml)。
+设计细节见 [`docs/DESIGN.md`](docs/DESIGN.md)。接口契约的真源是**代码里的 swag 注解**
+（`cmd/eventd/main.go` 的 General API Info + 每个 handler 的 `@Summary/@Tags/@Router`），
+`make swagger` 生成 [`api/swagger.json`](api/swagger.json)，没有再手工维护的规范文件。
 
 ## 快速开始
 
@@ -110,7 +112,7 @@ curl -sX POST localhost:8080/v1/subscriptions/sub_01J8.../ack \
 | POST | `/v1/subscriptions/{id}/pause`、`/resume` | 暂停/恢复投递 | admin |
 | GET | `/v1/deliveries` | 投递记录（含 DLQ：`?status=dead`） | admin |
 | POST | `/v1/deliveries/requeue` | 重投 DLQ | admin |
-| GET | `/healthz` `/readyz` `/metrics` | 运维 | 无 |
+| GET | `/health` `/healthz` `/readyz` `/metrics` | 运维 | 无 |
 
 ## 配置
 
@@ -144,12 +146,73 @@ curl -sX POST localhost:8080/v1/subscriptions/sub_01J8.../ack \
 ## 开发
 
 ```bash
-make test        # 全部测试
-make race        # 竞态检测
-make run         # 本地运行
-make build       # 产出 bin/eventd
-make lint        # gofmt 检查 + go vet
+make test           # 全部测试
+make race           # 竞态检测
+make run            # 本地运行
+make build          # 产出 bin/eventd
+make lint           # gofmt 检查 + go vet
+make swagger        # 按代码里的注解重新生成 api/swagger.json
+make swagger-check  # 校验 api/swagger.json 与注解一致（CI 用，不一致即失败）
 ```
+
+### 打包/发版（build.sh）
+
+发版包由 `build.sh` 产出（`outputs/`，其中必须有 `outputs/scripts/restart.sh`，平台按
+「agent-control-plane-deployment」规范检查）。调用方是控制面 `packageFromGit`，或本机
+`/Users/gaolei/deployment/bin/release.sh event-center [ref]`：
+
+```bash
+APP_VERSION="$(git rev-parse --short=8 HEAD)" ./build.sh   # 产出 outputs/
+REGISTER_CONTRACT=0 APP_VERSION=dev ./build.sh             # 只打包，不登记契约
+```
+
+Go 构建缓存放在仓库**之外**，默认 `$XDG_CACHE_HOME/event-center-build-cache`（macOS 上即
+`~/.cache/event-center-build-cache`），可用 `EC_BUILD_CACHE` 覆盖。它必须落在不会被系统
+清理的目录：go 判断「工具链/模块是否已下载」只看目录在不在，缓存被清空成空目录骨架时它
+会直接报 `go: download go1.25.0: stat .../bin/go: no such file or directory`，而不是重新
+解包 —— 打包会次次失败。因此 `build.sh` 每次都会先体检缓存（丢掉没解包完整的工具链和
+空壳模块目录），并在报错指向缓存不完整时自动清掉解包产物重试一次
+（`SKIP_CACHE_RETRY=1` 可关掉重试）。首次打包（缓存为空）需要下载工具链与模块，之后是增量。
+
+## 服务契约：注解即真源
+
+服务契约（对外 API + 元信息）**不手工维护规范文件**，而是写在代码里，用
+[swaggo/swag](https://github.com/swaggo/swag) 的注解表达；注解只影响生成规范，运行时零依赖：
+
+- `cmd/eventd/main.go` 顶部：General API Info（`@title` / `@version` / `@description` /
+  `@BasePath` / 鉴权定义 / tag 说明）；
+- 每个 handler 上方：`@Summary` / `@Tags` / `@Router`（外加 `@Param` / `@Success` /
+  `@Failure` / `@Security`）。请求体与响应体的类型来自 `internal/api/dto.go` 和
+  `internal/model/`，所以规范里的结构就是 handler 真正编解码的结构。
+
+```bash
+make swagger                 # 读注解 → api/swagger.json（生成物，别手改）
+make swagger-check           # 改了 handler 忘了重新生成：这里会红
+```
+
+生成物登记到**服务中心**（service-registry，`127.0.0.1:4240`）是一条命令，幂等，
+重复跑无副作用（规范没变化时连 revision 都不刷）：
+
+```bash
+SERVICE_NAME=event-center REGISTRY_URL=http://127.0.0.1:4240 \
+SWAG_MAIN=cmd/eventd/main.go SWAG_OUT=api \
+SWAG_ARGS="--parseInternal --outputTypes json" \
+DEPARTMENT_ID=D0002 INSTANCES=127.0.0.1:9099 OWNER=kaulie HEALTH_PATH=/health \
+  bash client/ci/register-go-service.sh
+```
+
+（`REGISTRY_URL` 必须写死：脚本默认取 `http://127.0.0.1:${SERVICE_PORT}`，而 `SERVICE_PORT`
+在 CI/沙箱里常被"当前服务的端口"占用，不写死就会把契约 PUT 到别的服务上。）
+
+它挂在两处自动化里，改完接口只需合入即可：
+
+| 触发点 | 位置 | 说明 |
+|---|---|---|
+| 发版/打包 | `build.sh` 末尾 | 打包完成后顺手登记；失败只告警，**不挡发布**（`REGISTER_CONTRACT=0` 可跳过） |
+| CI | `.github/workflows/register-contract.yml` | push 到 `main` 或手动触发；先 `make swagger-check`，再登记 |
+
+注册中心默认只绑 `127.0.0.1`，所以这两处都必须跑在**本机 / self-hosted runner**。脚本本身
+（`client/`）是注册中心 `client/` 的原样拷贝，升级方式见 [`client/README.md`](client/README.md)。
 
 ## 交付语义（务必阅读）
 
