@@ -12,6 +12,46 @@
     "host": "127.0.0.1:9099",
     "basePath": "/",
     "paths": {
+        "/": {
+            "get": {
+                "description": "在浏览器里查看各流的序号和最近事件。页面本身不鉴权；数据请求走消费接口，配置了 admin token 时在页面上填写。",
+                "produces": [
+                    "text/html"
+                ],
+                "tags": [
+                    "consume"
+                ],
+                "summary": "事件流看板",
+                "responses": {
+                    "200": {
+                        "description": "看板 HTML",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/dashboard": {
+            "get": {
+                "description": "在浏览器里查看各流的序号和最近事件。页面本身不鉴权；数据请求走消费接口，配置了 admin token 时在页面上填写。",
+                "produces": [
+                    "text/html"
+                ],
+                "tags": [
+                    "consume"
+                ],
+                "summary": "事件流看板",
+                "responses": {
+                    "200": {
+                        "description": "看板 HTML",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/github-events-ingress": {
             "post": {
                 "security": [
