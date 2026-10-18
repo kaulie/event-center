@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>事件流 · event-center</title>
+  <link rel="icon" href="/dashboard/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/dashboard/app.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <span class="mark" aria-hidden="true"></span>
+      <div>
+        <strong>事件流</strong>
+        <span class="brand-sub">event-center</span>
+      </div>
+    </div>
+    <div class="top-meta">
+      <span id="global-seq">全局序号 —</span>
+      <span id="version"></span>
+      <span id="status" role="status">正在连接</span>
+    </div>
+    <div class="auth">
+      <button type="button" id="auth-toggle">凭据</button>
+      <form id="auth-form" hidden>
+        <label class="sr-only" for="token">Admin token 或订阅 API key</label>
+        <input id="token" type="password" placeholder="Admin token 或 API key" autocomplete="off" spellcheck="false">
+        <button type="submit">使用</button>
+        <button type="button" id="auth-clear">清除</button>
+      </form>
+    </div>
+  </header>
+
+  <div id="banner" class="banner" hidden></div>
+
+  <div class="layout">
+    <aside class="streams-pane">
+      <h2>流</h2>
+      <ul id="streams"></ul>
+    </aside>
+
+    <main class="events-pane">
+      <div class="toolbar">
+        <h2 id="stream-title">全部</h2>
+        <label class="follow"><input id="follow" type="checkbox" checked> 跟随新事件</label>
+        <label class="sr-only" for="filter">筛选类型或 subject</label>
+        <input id="filter" type="search" placeholder="筛选类型或 subject" autocomplete="off">
+        <button type="button" id="refresh">刷新</button>
+      </div>
+      <p id="window-note" class="window-note"></p>
+      <p id="empty" class="empty" hidden>还没有事件。注入进 /github-events-ingress 或 /v1/ingest/{source} 之后会出现在这里。</p>
+      <div class="table-wrap" id="table-wrap" hidden>
+        <table>
+          <thead>
+            <tr>
+              <th>序号</th>
+              <th>时间</th>
+              <th>类型</th>
+              <th>subject</th>
+              <th>id</th>
+            </tr>
+          </thead>
+          <tbody id="events"></tbody>
+        </table>
+      </div>
+    </main>
+
+    <aside class="detail-pane">
+      <div class="detail-head">
+        <h2>事件</h2>
+        <button type="button" id="copy-detail" hidden>复制</button>
+      </div>
+      <pre id="detail-body">选择一条事件查看原文</pre>
+    </aside>
+  </div>
+  <script src="/dashboard/app.js"></script>
+</body>
+</html>

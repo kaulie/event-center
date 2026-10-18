@@ -90,6 +90,9 @@ curl -s 'localhost:8080/v1/streams/github/events?after=0&limit=100'
 # long-poll：挂起等新事件（最多 30s），有新事件立即返回
 curl -s 'localhost:8080/v1/streams/github/events?after=100&wait=30s'
 
+# 或者直接打开看板：/ 和 /dashboard 都会给出事件流页面
+# 页面不鉴权；配置了 EVENTD_ADMIN_TOKEN 时，在页面上填写 token 或订阅 API key
+
 # 提交位点（订阅自己的 key）
 curl -sX POST localhost:8080/v1/subscriptions/sub_01J8.../ack \
   -H "X-API-Key: $SUB_SECRET" -d '{"cursor":100}'
@@ -105,6 +108,7 @@ curl -sX POST localhost:8080/v1/subscriptions/sub_01J8.../ack \
 | POST | `/v1/ingest/{source}` | 通用注入（信封体） | source secret |
 | GET | `/v1/streams` | 流列表 + 全局 seq | admin / api key |
 | GET | `/v1/streams/{stream}/events` | 拉取事件（`after`/`limit`/`wait`） | admin / api key |
+| GET | `/` `/dashboard` | 事件流看板（数据仍走上面的消费接口） | 页面无；数据要 admin / api key |
 | GET | `/v1/events/{id}` | 按 id 查事件 | admin / api key |
 | POST | `/v1/subscriptions/{id}/ack` | 提交消费位点（只前进） | 订阅 key / admin |
 | GET/PUT/DELETE | `/v1/sources[/{id}]` | 来源管理 | admin |

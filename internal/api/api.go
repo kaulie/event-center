@@ -95,6 +95,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/events/{id}", s.authConsume(s.handleGetEvent))
 	mux.HandleFunc("POST /v1/subscriptions/{id}/ack", s.handleAck)
 
+	// Dashboard. The HTML is public; data requests still go through the
+	// consume API above. "GET /{$}" is only the root, not a catch-all.
+	mux.HandleFunc("GET /{$}", s.handleDashboardPage)
+	mux.HandleFunc("GET /dashboard", s.handleDashboardPage)
+	mux.HandleFunc("GET /dashboard/{file}", s.handleDashboardAsset)
+
 	// Administration.
 	mux.HandleFunc("GET /v1/sources", s.authAdmin(s.handleListSources))
 	mux.HandleFunc("PUT /v1/sources/{id}", s.authAdmin(s.handleUpsertSource))

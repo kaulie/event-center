@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -483,6 +484,86 @@ func TestHealthAndMetricsEndpoints(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	if !bytes.Contains(body, []byte("eventd_events_ingested_total")) {
 		t.Fatalf("metrics body missing ingest counter:\n%s", body)
+	}
+}
+
+func TestDashboardServesEventStreamUI(t *testing.T) {
+	ts, _ := newTestServer(t, "admin-secret")
+
+	for _, path := range []string{"/", "/dashboard"} {
+		resp, err := http.Get(ts.URL + path)
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s = %d, want 200", path, resp.StatusCode)
+		}
+		if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "text/html") {
+			t.Fatalf("GET %s content-type = %q, want text/html", path, ct)
+		}
+		if !bytes.Contains(body, []byte("事件流")) || !bytes.Contains(body, []byte("/dashboard/app.js")) {
+			t.Fatalf("GET %s body is not the dashboard:\n%s", path, body)
+		}
+		if csp := resp.Header.Get("Content-Security-Policy"); !strings.Contains(csp, "default-src 'self'") {
+			t.Fatalf("GET %s missing content security policy: %q", path, csp)
+		}
+	}
+
+	js, err := http.Get(ts.URL + "/dashboard/app.js")
+	if err != nil {
+		t.Fatalf("GET app.js: %v", err)
+	}
+	jsBody, _ := io.ReadAll(js.Body)
+	js.Body.Close()
+	if js.StatusCode != http.StatusOK {
+		t.Fatalf("GET app.js = %d, want 200", js.StatusCode)
+	}
+	if ct := js.Header.Get("Content-Type"); !strings.Contains(ct, "javascript") {
+		t.Fatalf("app.js content-type = %q", ct)
+	}
+	if !bytes.Contains(jsBody, []byte("/v1/streams")) {
+		t.Fatal("dashboard script does not call the streams API")
+	}
+
+	css, err := http.Get(ts.URL + "/dashboard/app.css")
+	if err != nil {
+		t.Fatalf("GET app.css: %v", err)
+	}
+	css.Body.Close()
+	if css.StatusCode != http.StatusOK {
+		t.Fatalf("GET app.css = %d, want 200", css.StatusCode)
+	}
+	if ct := css.Header.Get("Content-Type"); !strings.Contains(ct, "text/css") {
+		t.Fatalf("app.css content-type = %q", ct)
+	}
+
+	missing, err := http.Get(ts.URL + "/dashboard/secret.txt")
+	if err != nil {
+		t.Fatalf("GET missing asset: %v", err)
+	}
+	missing.Body.Close()
+	if missing.StatusCode != http.StatusNotFound {
+		t.Fatalf("GET /dashboard/secret.txt = %d, want 404", missing.StatusCode)
+	}
+
+	escaped, err := http.Get(ts.URL + "/dashboard/%2e%2e")
+	if err != nil {
+		t.Fatalf("GET escaped asset: %v", err)
+	}
+	escaped.Body.Close()
+	if escaped.StatusCode == http.StatusOK {
+		t.Fatal("escaped asset path must not return a file")
+	}
+
+	unknown, err := http.Get(ts.URL + "/no-such-page")
+	if err != nil {
+		t.Fatalf("GET unknown: %v", err)
+	}
+	unknown.Body.Close()
+	if unknown.StatusCode != http.StatusNotFound {
+		t.Fatalf("GET /no-such-page = %d, want 404", unknown.StatusCode)
 	}
 }
 
